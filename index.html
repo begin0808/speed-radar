@@ -106,6 +106,12 @@
                 <span id="gps-indicator" class="w-2 h-2 rounded-full bg-gray-500"></span>
                 <span id="gps-text" class="text-xs text-gray-400">GPS 未啟動</span>
             </div>
+            
+            <!-- 新增：Wake Lock 狀態指示 -->
+            <div class="flex items-center gap-1 opacity-50" id="wake-lock-status">
+                <span class="text-xs text-gray-400">💡 螢幕恆亮</span>
+            </div>
+
             <div id="db-status" class="text-[10px] bg-yellow-700 px-2 py-1 rounded text-gray-200">
                 載入資料中...
             </div>
@@ -176,10 +182,60 @@
         let lastRoadFetchTime = 0;
         let lastRoadFetchPos = null;
 
+        // Wake Lock
+        let wakeLock = null;
+
         function init() {
             initMap();
             loadCameras();
             startGPS();
+            requestWakeLock(); // 啟動螢幕恆亮
+        }
+
+        // --- Wake Lock API: 保持螢幕開啟 ---
+        async function requestWakeLock() {
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    updateWakeLockUI(true);
+                    
+                    wakeLock.addEventListener('release', () => {
+                        console.log('Wake Lock released');
+                        updateWakeLockUI(false);
+                    });
+                    console.log('Wake Lock is active');
+                } else {
+                    console.warn('Wake Lock API not supported');
+                }
+            } catch (err) {
+                // 針對預覽環境權限錯誤的特別處理
+                if (err.name === 'NotAllowedError' && err.message.includes('permissions policy')) {
+                     console.warn('Wake Lock (螢幕恆亮) 因權限政策被停用 (預覽環境限制)。');
+                } else {
+                     console.error(`${err.name}, ${err.message}`);
+                }
+                updateWakeLockUI(false);
+            }
+        }
+
+        // 當頁面重新可見時 (例如切換分頁回來)，重新申請鎖定
+        document.addEventListener('visibilitychange', async () => {
+            if (wakeLock !== null && document.visibilityState === 'visible') {
+                await requestWakeLock();
+            }
+        });
+
+        function updateWakeLockUI(isActive) {
+            const el = document.getElementById('wake-lock-status');
+            if (isActive) {
+                el.classList.remove('opacity-50');
+                el.classList.add('text-yellow-400');
+                el.innerHTML = '<span class="text-xs">💡 螢幕恆亮</span>';
+            } else {
+                el.classList.add('opacity-50');
+                el.classList.remove('text-yellow-400');
+                el.innerHTML = '<span class="text-xs text-gray-500">螢幕未鎖定</span>';
+            }
         }
 
         function initMap() {
@@ -281,15 +337,12 @@
             fetchRoadName(lat, lng);
 
             // 2.【關鍵修正】嚴格路名檢查
-            // 如果還沒抓到路名，或者路名未知，則完全不進行警示判斷
-            // 這能確保只有在確定位於哪條路時，才發出通知，避免誤差
             if (!currentRoadName || currentRoadName === "未知道路") {
-                // 更新狀態顯示，讓使用者知道正在等待路名
                 const roadDisplay = document.getElementById('current-road-display');
                 if (roadDisplay && roadDisplay.innerText === "偵測中...") {
                     roadDisplay.innerText = "確認路名中...";
                 }
-                return; // ★ 直接返回，不比對距離 ★
+                return; 
             }
 
             if (cameras.length === 0) return;
@@ -313,12 +366,8 @@
                 }
 
                 // 3. 路名比對 (Road Name Match)
-                // 執行到這裡，代表 currentRoadName 已經是有效的了
                 if (cam.address) {
                     if (currentRoadName.length >= 2) {
-                        // 簡單包含檢查：相機地址如果不包含目前路名，視為平行道路
-                        // 例如: 目前"仁愛路"，相機"信義路" -> 不包含 -> 忽略
-                        // 寬鬆處理：去除"段"之後的比對
                         const coreRoadName = currentRoadName.replace(/段.*/, '').replace(/\d+號.*/, '');
                         if (!cam.address.includes(coreRoadName)) {
                             continue;
