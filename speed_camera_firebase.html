@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>測速照相警示系統 (Firebase Live Data)</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #1a1a1a; }
+        #map { height: 100%; width: 100%; z-index: 1; }
+        #alert-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255, 0, 0, 0.3); border: 8px solid red;
+            display: none; z-index: 9999; pointer-events: none;
+            animation: pulse 0.8s infinite;
+        }
+        #dashboard {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            width: 95%; max-width: 420px;
+            background: rgba(17, 24, 39, 0.9); color: white;
+            padding: 15px; border-radius: 16px; z-index: 1000;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+            border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px);
+        }
+        #top-bar {
+            position: fixed; top: 15px; left: 15px; right: 15px;
+            z-index: 1000; display: flex; justify-content: space-between; pointer-events: none;
+        }
+        .btn-control {
+            pointer-events: auto; background: rgba(255, 255, 255, 0.9); color: #1f2937;
+            padding: 8px 16px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3); border: none; transition: all 0.2s;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .btn-control:active { transform: scale(0.95); }
+        @keyframes pulse {
+            0% { opacity: 0.3; border-color: rgba(220, 38, 38, 0.4); }
+            50% { opacity: 1; border-color: rgba(220, 38, 38, 1); }
+            100% { opacity: 0.3; border-color: rgba(220, 38, 38, 0.4); }
+        }
+        .camera-icon-img { filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); transition: transform 0.3s; }
+    </style>
+</head>
+<body>
+
+    <div id="alert-overlay"></div>
+
+    <div id="top-bar">
+        <button onclick="enableAudio()" id="btn-audio" class="btn-control">
+            🔇 開啟語音
+        </button>
+        <div class="flex gap-2">
+            <button onclick="startGPS()" class="btn-control bg-green-600 text-white! hover:bg-green-700">
+                🛰️ 真實 GPS
+            </button>
+            <button onclick="toggleSimulation()" class="btn-control bg-blue-600 text-white! hover:bg-blue-700">
+                🚗 模擬
+            </button>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <div id="dashboard">
+        <div class="flex justify-between items-center mb-2">
+            <div class="flex items-center gap-2">
+                <span id="gps-indicator" class="w-2 h-2 rounded-full bg-gray-500"></span>
+                <span id="gps-text" class="text-xs text-gray-400">GPS 未啟動</span>
+            </div>
+            <div id="db-status" class="text-[10px] bg-yellow-700 px-2 py-1 rounded text-gray-200">
+                連線 Firebase 中...
+            </div>
+        </div>
+
+        <div class="flex justify-between items-end">
+            <div>
+                <div class="text-gray-400 text-xs font-bold tracking-wider">SPEED</div>
+                <div class="flex items-baseline gap-1">
+                    <span class="text-5xl font-black font-mono tracking-tighter" id="speed-display">0</span>
+                    <span class="text-sm text-gray-500 font-bold">km/h</span>
+                </div>
+            </div>
+            <div class="text-right flex flex-col items-end">
+                <div class="text-gray-400 text-xs font-bold tracking-wider mb-1">DISTANCE</div>
+                <div class="text-3xl font-bold text-gray-500 font-mono" id="distance-display">-- <span class="text-sm">m</span></div>
+                <div id="limit-box" class="mt-2 flex items-center gap-2 opacity-30 transition-opacity duration-300">
+                    <span class="text-xs text-gray-400">速限</span>
+                    <div class="w-8 h-8 rounded-full border-2 border-red-500 flex items-center justify-center bg-white text-black font-bold text-sm" id="limit-val">--</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="alert-message-box" class="mt-3 py-2 px-3 bg-gray-800 rounded-lg text-center hidden transition-all duration-300">
+            <span id="alert-text" class="text-lg font-bold"></span>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+    <!-- Firebase SDK (Version 11.6.1) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, onSnapshot, query, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        // ⚠️⚠️⚠️【關鍵修改：請在此填入您的 Firebase Config】⚠️⚠️⚠️
+        // 如果您是在「本地電腦」打開此檔案，請務必將下方的 firebaseConfig 替換成您自己的設定！
+        // 1. 去 Firebase Console -> Project Settings -> General -> Your apps -> SDK setup and configuration -> Config
+        // 2. 複製那一段 const firebaseConfig = { ... }; 貼上覆蓋下方內容
+        
+        const firebaseConfig = {
+  apiKey: "AIzaSyD7C4nl7aMFCNBOzCZH5Jup-sXxXRMOxfY",
+  authDomain: "speedcameraapp-36faa.firebaseapp.com",
+  projectId: "speedcameraapp-36faa",
+  storageBucket: "speedcameraapp-36faa.firebasestorage.app",
+  messagingSenderId: "610700934168",
+  appId: "1:610700934168:web:ec96ec3de0749fb7fed76d",
+  measurementId: "G-WBMFXYPJFN"
+};
+        // -------------------------------------------------------------
+
+        // 偵測是否在 Canvas 預覽環境 (您在本地執行時，這段會自動跳過)
+        let finalConfig = firebaseConfig;
+        let isPreviewEnv = false;
+        let currentAppId = 'default';
+        
+        try {
+            if (typeof __firebase_config !== 'undefined') {
+                finalConfig = JSON.parse(__firebase_config);
+                currentAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                isPreviewEnv = true;
+            }
+        } catch (e) {
+            console.log("本地模式：使用手動填寫的 Config");
+        }
+
+        // 初始化 Firebase
+        let app, db, auth;
+        try {
+            app = initializeApp(finalConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+        } catch (e) {
+            document.getElementById('db-status').innerText = "設定錯誤：請檢查 HTML 內的 firebaseConfig";
+            document.getElementById('db-status').classList.replace('bg-yellow-700', 'bg-red-700');
+            alert("⚠️ 錯誤：請用記事本打開 HTML 檔案，填入您的 Firebase Config！\n(請參考程式碼內的註解)");
+            throw e;
+        }
+
+        // 登入程序
+        const initAuth = async () => {
+            const statusTag = document.getElementById('db-status');
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                statusTag.innerText = "驗證成功，正在載入...";
+                statusTag.classList.replace('bg-yellow-700', 'bg-blue-700');
+            } catch (error) {
+                console.error("Auth Failed", error);
+                
+                // 更詳細的錯誤提示
+                let errorMsg = `驗證失敗: ${error.code || error.message}`;
+                statusTag.innerText = errorMsg;
+                statusTag.classList.replace('bg-yellow-700', 'bg-red-700');
+
+                if (error.code === 'auth/operation-not-allowed') {
+                    alert("⚠️ 錯誤：您尚未在 Firebase 後台啟用「匿名登入」。\n請去 Authentication -> Sign-in method 開啟 Anonymous。");
+                } else if (error.code === 'auth/invalid-api-key') {
+                    alert("⚠️ 錯誤：無效的 API Key。\n請檢查 HTML 檔案中的 firebaseConfig 是否已填入正確資訊。");
+                }
+            }
+        };
+
+        initAuth();
+
+        // 監聽 Auth 狀態改變
+        onAuthStateChanged(auth, async (user) => {
+            if (!user) return;
+            
+            const statusTag = document.getElementById('db-status');
+            
+            // ⚠️ 資料庫路徑選擇：
+            // - 本地執行：讀取根目錄的 "speed_cameras" (對應您的 update_data.js)
+            // - 預覽環境：讀取 "artifacts/.../speed_cameras"
+            let q;
+            if (isPreviewEnv) {
+                 const collectionPath = `artifacts/${currentAppId}/public/data/speed_cameras`;
+                 q = query(collection(db, collectionPath));
+                 // 僅在預覽環境檢查種子資料
+                 await checkAndSeedData(collectionPath);
+            } else {
+                 // 本地模式：直接讀取您後端腳本寫入的集合
+                 q = query(collection(db, "speed_cameras"));
+            }
+            
+            onSnapshot(q, (snapshot) => {
+                const loadedCameras = [];
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    let lat, lng;
+                    // 相容不同的經緯度欄位名稱
+                    if (data.location && data.location.latitude) {
+                        lat = data.location.latitude;
+                        lng = data.location.longitude;
+                    } else if (data.lat && data.lng) {
+                        lat = data.lat;
+                        lng = data.lng;
+                    }
+
+                    if (lat && lng) {
+                        loadedCameras.push({
+                            id: doc.id,
+                            lat: lat,
+                            lng: lng,
+                            limit: data.limit,
+                            address: data.address
+                        });
+                    }
+                });
+
+                if (loadedCameras.length === 0) {
+                     statusTag.innerText = "資料庫為空 (請執行 node update_data.js)";
+                     statusTag.classList.replace('bg-blue-700', 'bg-red-700');
+                } else {
+                    window.updateCameras(loadedCameras);
+                    statusTag.innerText = `🔥 已連線: ${loadedCameras.length} 筆資料 (即時)`;
+                    statusTag.classList.replace('bg-blue-700', 'bg-green-700');
+                }
+            }, (error) => {
+                console.error("Snapshot Error:", error);
+                statusTag.innerText = "資料讀取失敗 (權限或連線)";
+                statusTag.classList.replace('bg-blue-700', 'bg-red-700');
+                if (error.code === 'permission-denied') {
+                    alert("讀取失敗：權限不足。\n請到 Firebase Console -> Firestore Database -> Rules\n將 allow read, write: if false; 改為 if true;");
+                }
+            });
+        });
+
+        // 檢查並寫入範例資料的功能 (僅預覽環境使用)
+        async function checkAndSeedData(path) {
+            try {
+                const colRef = collection(db, path);
+                const snapshot = await getDocs(colRef);
+                if (snapshot.empty) {
+                    console.log("資料庫為空，寫入範例資料...");
+                    const mockData = [
+                        { address: "信義路五段 (模擬點A)", limit: 50, lat: 25.032969, lng: 121.560000 },
+                        { address: "松高路 (模擬點B)", limit: 60, lat: 25.035000, lng: 121.568000 }
+                    ];
+                    const promises = mockData.map(data => addDoc(colRef, data));
+                    await Promise.all(promises);
+                }
+            } catch (e) {
+                console.error("Seeding Error:", e);
+            }
+        }
+    </script>
+
+    <script>
+        // --- 主邏輯 (與 Firebase 分離，保持乾淨) ---
+        const CONFIG = { WARN_DIST: 600, ALERT_DIST: 300, RESET_DIST: 800 };
+        let map, userMarker;
+        let cameras = [];
+        let currentPos = { lat: 25.033964, lng: 121.564468 }; 
+        let watchId = null;
+        let audioEnabled = false;
+        let speechState = { hasWarned600: false, hasWarned300: false, currentCameraId: null };
+        let isSimulating = false;
+        let simInterval;
+
+        // 1. 初始化
+        function initMap() {
+            map = L.map('map', { zoomControl: false }).setView([currentPos.lat, currentPos.lng], 15);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '© OpenStreetMap', maxZoom: 19
+            }).addTo(map);
+
+            const carIcon = L.divIcon({
+                className: 'custom-car',
+                html: `<div style="background:#3B82F6; width:24px; height:24px; border-radius:50%; border:3px solid white; box-shadow:0 0 15px #3B82F6;"></div>`,
+                iconSize: [24, 24], iconAnchor: [12, 12]
+            });
+            userMarker = L.marker([currentPos.lat, currentPos.lng], {icon: carIcon, zIndexOffset: 1000}).addTo(map);
+
+            map.on('click', (e) => {
+                if(!watchId) startSimulation(e.latlng); // 只有在非真實 GPS 模式下才允許點擊模擬
+            });
+        }
+
+        // 2. 接收 Firebase 資料並繪製
+        window.updateCameras = function(dataList) {
+            cameras = dataList;
+            
+            // 清除舊標記 (如果有的話)
+            // 這裡為了簡化，簡單重繪，實務上應使用 id 追蹤
+            // 移除舊的 Marker
+            map.eachLayer((layer) => {
+                if(layer instanceof L.Marker && layer !== userMarker) {
+                    map.removeLayer(layer);
+                }
+            });
+
+            const icon = L.icon({
+                iconUrl: 'https://cdn-icons-png.flaticon.com/512/3256/3256054.png',
+                iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -10],
+                className: 'camera-icon-img'
+            });
+
+            cameras.forEach(cam => {
+                L.marker([cam.lat, cam.lng], {icon: icon})
+                    .bindPopup(`<div class="text-black font-bold">${cam.address}<br>限速: ${cam.limit}</div>`)
+                    .addTo(map);
+            });
+            
+            console.log("地圖已更新真實資料點位");
+        }
+
+        // 3. 核心偵測 (共用)
+        function checkProximity(lat, lng, speed = 0) {
+            if (cameras.length === 0) return;
+
+            let minDist = Infinity;
+            let nearestCam = null;
+
+            // 簡單遍歷
+            for (let cam of cameras) {
+                const d = getDistance(lat, lng, cam.lat, cam.lng);
+                if (d < minDist) {
+                    minDist = d;
+                    nearestCam = cam;
+                }
+            }
+
+            updateUI(minDist, nearestCam, speed);
+            handleVoiceAlert(minDist, nearestCam);
+        }
+
+        // 4. 真實 GPS 追蹤
+        function startGPS() {
+            if (isSimulating) {
+                clearInterval(simInterval);
+                isSimulating = false;
+            }
+
+            if (!navigator.geolocation) {
+                alert("瀏覽器不支援 GPS");
+                return;
+            }
+
+            const indicator = document.getElementById('gps-indicator');
+            const text = document.getElementById('gps-text');
+            
+            indicator.className = "w-2 h-2 rounded-full bg-yellow-500 animate-pulse";
+            text.innerText = "GPS 定位中...";
+
+            watchId = navigator.geolocation.watchPosition(
+                (pos) => {
+                    const { latitude, longitude, speed } = pos.coords;
+                    currentPos = { lat: latitude, lng: longitude };
+                    
+                    // 更新地圖
+                    userMarker.setLatLng([latitude, longitude]);
+                    map.setView([latitude, longitude], 17);
+                    
+                    // 速度處理 (m/s -> km/h)
+                    const kmh = speed ? Math.round(speed * 3.6) : 0;
+                    
+                    checkProximity(latitude, longitude, kmh);
+
+                    indicator.className = "w-2 h-2 rounded-full bg-green-500 animate-pulse";
+                    text.innerText = "GPS 連線中";
+                },
+                (err) => {
+                    console.error(err);
+                    indicator.className = "w-2 h-2 rounded-full bg-red-500";
+                    text.innerText = "GPS 訊號遺失";
+                },
+                { enableHighAccuracy: true, maximumAge: 1000 }
+            );
+        }
+
+        // 5. 模擬行駛
+        function startSimulation(targetLatLng) {
+            isSimulating = true;
+            const start = currentPos;
+            const steps = 200;
+            let step = 0;
+            
+            // 隨機產生一個模擬速度
+            let mockSpeed = Math.floor(Math.random() * 40) + 40; 
+
+            simInterval = setInterval(() => {
+                step++;
+                const progress = step / steps;
+                const lat = start.lat + (targetLatLng.lat - start.lat) * progress;
+                const lng = start.lng + (targetLatLng.lng - start.lng) * progress;
+                
+                currentPos = { lat, lng };
+                userMarker.setLatLng([lat, lng]);
+                map.panTo([lat, lng]);
+
+                checkProximity(lat, lng, mockSpeed);
+
+                if (step >= steps) {
+                    clearInterval(simInterval);
+                    isSimulating = false;
+                    updateUI(Infinity, null, 0);
+                }
+            }, 20);
+        }
+
+        function toggleSimulation() {
+            alert("請點擊地圖任意處開始模擬行駛");
+        }
+
+        function getDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3;
+            const φ1 = lat1 * Math.PI/180, φ2 = lat2 * Math.PI/180;
+            const Δφ = (lat2-lat1) * Math.PI/180, Δλ = (lon2-lon1) * Math.PI/180;
+            const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        function updateUI(dist, cam, speed) {
+            document.getElementById('speed-display').innerText = speed;
+            const elDist = document.getElementById('distance-display');
+            const elOverlay = document.getElementById('alert-overlay');
+            const elMsgBox = document.getElementById('alert-message-box');
+            const elLimitBox = document.getElementById('limit-box');
+
+            if (dist > 2000 || !cam) {
+                elDist.innerText = "--";
+                elOverlay.style.display = 'none';
+                elMsgBox.classList.add('hidden');
+                elLimitBox.classList.add('opacity-30');
+                return;
+            }
+
+            elDist.innerText = Math.round(dist);
+            document.getElementById('limit-val').innerText = cam.limit;
+            elLimitBox.classList.remove('opacity-30');
+
+            if (dist <= CONFIG.ALERT_DIST) {
+                elOverlay.style.display = 'block';
+                elMsgBox.classList.remove('hidden');
+                elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
+                elDist.className = "text-3xl font-bold text-red-500 font-mono";
+            } else if (dist <= CONFIG.WARN_DIST) {
+                elOverlay.style.display = 'none';
+                elMsgBox.classList.remove('hidden');
+                elMsgBox.innerHTML = `<span class="text-lg font-bold text-yellow-300">🔔 前方測速</span>`;
+                elDist.className = "text-3xl font-bold text-yellow-400 font-mono";
+            } else {
+                elOverlay.style.display = 'none';
+                elMsgBox.classList.add('hidden');
+                elDist.className = "text-3xl font-bold text-white font-mono";
+            }
+        }
+
+        function handleVoiceAlert(dist, cam) {
+            if (!audioEnabled || !cam) return;
+            
+            if (speechState.currentCameraId !== cam.id || dist > CONFIG.RESET_DIST) {
+                speechState = { hasWarned600: false, hasWarned300: false, currentCameraId: cam.id };
+            }
+
+            if (dist <= CONFIG.WARN_DIST && dist > CONFIG.ALERT_DIST && !speechState.hasWarned600) {
+                speak(`前方六百公尺，測速照相，限速${cam.limit}`);
+                speechState.hasWarned600 = true;
+            }
+            if (dist <= CONFIG.ALERT_DIST && !speechState.hasWarned300) {
+                speak(`注意，限速${cam.limit}`);
+                speechState.hasWarned300 = true;
+            }
+        }
+
+        function speak(text) {
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance(text);
+            u.lang = 'zh-TW'; u.rate = 1.2;
+            window.speechSynthesis.speak(u);
+        }
+
+        function enableAudio() {
+            audioEnabled = true;
+            document.getElementById('btn-audio').innerText = "🔊 語音開啟";
+            speak("語音已啟動");
+        }
+
+        initMap();
+    </script>
+</body>
+</html>
