@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>測速照相警示系統 (Static Version)</title>
+    <title>測速照相警示系統 (Road Match Ver.)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -20,7 +20,7 @@
         #dashboard {
             position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
             width: 95%; max-width: 420px;
-            background: rgba(17, 24, 39, 0.9); color: white;
+            background: rgba(17, 24, 39, 0.95); color: white;
             padding: 15px; border-radius: 16px; z-index: 1000;
             box-shadow: 0 4px 20px rgba(0,0,0,0.6);
             border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px);
@@ -58,25 +58,25 @@
             100% { opacity: 0.3; border-color: rgba(220, 38, 38, 0.4); }
         }
 
-        /* --- 相機圖示樣式與顏色切換 --- */
-        .camera-icon-img { 
-            transition: filter 0.3s; /* 顏色切換時有過渡效果 */
-        }
-
-        /* 預設：深色模式下，將黑色圖示轉為白色，才看得見 */
-        .camera-icon-img {
-            filter: invert(100%);
-        }
-
-        /* 街道/淺色模式：將圖示轉為鮮紅色 */
+        .camera-icon-img { transition: filter 0.3s; }
+        .camera-icon-img { filter: invert(100%); } /* 深色模式預設白 */
+        
         .mode-street .camera-icon-img,
         .mode-light .camera-icon-img {
-            /* 這串魔法數字可以將黑色(#000)轉為紅色(#FF0000) */
+            /* 轉紅色 */
             filter: invert(16%) sepia(99%) saturate(7404%) hue-rotate(4deg) brightness(95%) contrast(118%);
         }
 
         .leaflet-control-layers { border: none !important; border-radius: 12px !important; box-shadow: 0 2px 10px rgba(0,0,0,0.3) !important; padding: 8px !important; }
         .leaflet-control-layers-toggle { width: 44px !important; height: 44px !important; }
+        
+        /* 路名顯示標籤 */
+        .road-badge {
+            background: #3b82f6; color: white; 
+            padding: 2px 8px; border-radius: 4px; 
+            font-size: 0.75rem; margin-left: 8px;
+            vertical-align: middle;
+        }
     </style>
 </head>
 <body>
@@ -98,7 +98,6 @@
         </button>
     </div>
 
-    <!-- 地圖容器，我們會在這裡動態加入 class 來切換圖示顏色 -->
     <div id="map"></div>
 
     <div id="dashboard">
@@ -109,6 +108,14 @@
             </div>
             <div id="db-status" class="text-[10px] bg-yellow-700 px-2 py-1 rounded text-gray-200">
                 載入資料中...
+            </div>
+        </div>
+        
+        <!-- 新增：目前路名顯示 -->
+        <div class="mb-2 pb-2 border-b border-gray-700">
+            <div class="text-gray-400 text-xs font-bold tracking-wider">目前位置 (OSM)</div>
+            <div class="text-sm font-bold text-blue-300 truncate" id="current-road-display">
+                偵測中...
             </div>
         </div>
 
@@ -141,11 +148,11 @@
         const DATA_URL = './cameras.json'; 
 
         const MOCK_DATA = [
-            { id: "mock1", address: "信義路五段 (模擬點)", limit: 50, lat: 25.032969, lng: 121.560000 },
-            { id: "mock2", address: "松高路 (模擬點)", limit: 60, lat: 25.035000, lng: 121.568000 },
-            { id: "mock3", address: "光復南路 (模擬點)", limit: 40, lat: 25.040000, lng: 121.558000 },
-            { id: "mock4", address: "莊敬路 (模擬點)", limit: 50, lat: 25.028000, lng: 121.565000 },
-            { id: "mock5", address: "基隆路一段 (模擬點)", limit: 50, lat: 25.041000, lng: 121.565000 }
+            { id: "mock1", address: "臺北市信義區信義路五段 (模擬點)", limit: 50, lat: 25.032969, lng: 121.560000 },
+            { id: "mock2", address: "臺北市信義區松高路 (模擬點)", limit: 60, lat: 25.035000, lng: 121.568000 },
+            { id: "mock3", address: "臺北市大安區光復南路 (模擬點)", limit: 40, lat: 25.040000, lng: 121.558000 },
+            { id: "mock4", address: "臺北市信義區莊敬路 (模擬點)", limit: 50, lat: 25.028000, lng: 121.565000 },
+            { id: "mock5", address: "臺北市信義區基隆路一段 (模擬點)", limit: 50, lat: 25.041000, lng: 121.565000 }
         ];
 
         const CONFIG = { 
@@ -163,6 +170,11 @@
         let speechState = { hasWarned600: false, hasWarned300: false, currentCameraId: null };
         let isSimulating = false;
         let simInterval;
+        
+        // 路名偵測相關變數
+        let currentRoadName = null;
+        let lastRoadFetchTime = 0;
+        let lastRoadFetchPos = null;
 
         function init() {
             initMap();
@@ -171,36 +183,21 @@
         }
 
         function initMap() {
-            const darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                attribution: '© OpenStreetMap, © CartoDB', maxZoom: 19
-            });
-            const lightLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                attribution: '© OpenStreetMap, © CartoDB', maxZoom: 19
-            });
-            const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap', maxZoom: 19
-            });
+            const darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '© OpenStreetMap, © CartoDB', maxZoom: 19 });
+            const lightLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { attribution: '© OpenStreetMap, © CartoDB', maxZoom: 19 });
+            const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 });
 
-            // 預設使用街道模式，並設定初始 class
+            // 預設使用街道模式
             document.getElementById('map').classList.add('mode-street');
             map = L.map('map', { zoomControl: false, layers: [osmLayer] }).setView([currentPos.lat, currentPos.lng], 15);
-            
             L.control.layers({ "深色 (Dark)": darkLayer, "淺色 (Light)": lightLayer, "街道 (Street)": osmLayer }, null, {position: 'topright'}).addTo(map);
 
-            // --- 新增：監聽圖層切換事件，自動變更相機顏色 ---
             map.on('baselayerchange', function(e) {
                 const mapDiv = document.getElementById('map');
-                // 先移除所有模式 class
                 mapDiv.classList.remove('mode-dark', 'mode-light', 'mode-street');
-                
-                // 根據圖層名稱加入對應 class
-                if (e.name.includes("深色")) {
-                    mapDiv.classList.add('mode-dark'); // 白色相機
-                } else if (e.name.includes("淺色")) {
-                    mapDiv.classList.add('mode-light'); // 紅色相機
-                } else {
-                    mapDiv.classList.add('mode-street'); // 紅色相機
-                }
+                if (e.name.includes("深色")) mapDiv.classList.add('mode-dark');
+                else if (e.name.includes("淺色")) mapDiv.classList.add('mode-light');
+                else mapDiv.classList.add('mode-street');
             });
 
             const carIcon = L.divIcon({
@@ -245,7 +242,44 @@
             });
         }
 
+        // --- 路名查詢功能 (使用 OSM Nominatim API) ---
+        async function fetchRoadName(lat, lng) {
+            const now = Date.now();
+            // 節流閥：每 10 秒或移動 > 50m 才查詢一次，避免 API 封鎖
+            if (now - lastRoadFetchTime < 10000 && lastRoadFetchPos && getDistance(lat, lng, lastRoadFetchPos.lat, lastRoadFetchPos.lng) < 50) {
+                return;
+            }
+
+            lastRoadFetchTime = now;
+            lastRoadFetchPos = { lat, lng };
+
+            try {
+                // 使用 OpenStreetMap 免費 API 查詢地址
+                const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1&accept-language=zh-TW`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data && data.address) {
+                    // 優先取得道路名稱
+                    const road = data.address.road || data.address.pedestrian || data.address.street || "未知道路";
+                    currentRoadName = road;
+                    
+                    // 更新 UI
+                    const roadDisplay = document.getElementById('current-road-display');
+                    roadDisplay.innerText = road;
+                    roadDisplay.classList.remove('text-gray-500');
+                    roadDisplay.classList.add('text-blue-300');
+                }
+            } catch (e) {
+                console.warn("路名查詢失敗:", e);
+                // 失敗時不清除舊路名，避免閃爍
+            }
+        }
+
         function checkProximity(lat, lng, speed = 0, heading = null) {
+            // 每次位置更新嘗試查詢路名
+            fetchRoadName(lat, lng);
+
             if (cameras.length === 0) return;
             
             let minDist = Infinity;
@@ -254,14 +288,45 @@
             for (let cam of cameras) {
                 const d = getDistance(lat, lng, cam.lat, cam.lng);
                 
+                // 1. 距離過濾
                 if (d > CONFIG.WARN_DIST) continue;
 
+                // 2. 方向過濾 (Vector Logic - 第一道防線)
                 if (speed > 5 && heading !== null && heading !== undefined) {
                     const bearingToCam = getBearing(lat, lng, cam.lat, cam.lng);
                     let angleDiff = Math.abs(heading - bearingToCam);
                     if (angleDiff > 180) angleDiff = 360 - angleDiff;
-                    if (angleDiff > CONFIG.VIEW_ANGLE) {
-                        continue; 
+                    
+                    // 夾角大於 40 度則忽略
+                    if (angleDiff > CONFIG.VIEW_ANGLE) continue; 
+                }
+
+                // 3. 路名比對 (Road Name Match - 第二道防線)
+                // 只有當我們成功抓到路名，且相機地址也有效時才進行比對
+                if (currentRoadName && currentRoadName !== "未知道路" && cam.address) {
+                    // 簡單字串比對：如果相機地址 不包含 目前路名
+                    // 例如：目前在「仁愛路」，相機在「信義路」，則忽略
+                    // 注意：需處理「段」字，例如 "信義路" 應匹配 "信義路五段"
+                    // 策略：如果目前路名是 "信義路五段"，而相機是 "信義路"，這算不符合？
+                    // 寬鬆策略：如果相機地址完全不包含目前路名的前2個字(假設路名大於2字)，則懷疑是平行道路
+                    
+                    // 實作：直接檢查包含關係
+                    // 只有當 currentRoadName 明確且長度足夠時才啟用過濾
+                    if (currentRoadName.length >= 2) {
+                        // 如果相機地址裡面 找不到 目前的路名，就視為不同路
+                        if (!cam.address.includes(currentRoadName)) {
+                            // 特殊處理：有時候 OSM 回傳 "信義路"，相機是 "信義路五段"，這是 Match 的
+                            // 反之 OSM 回傳 "信義路五段"，相機是 "信義路"，這也是 Match 的
+                            // 這裡做一個簡單的雙向檢查，如果兩邊都完全沒交集，才過濾
+                            
+                            // 提取路名核心 (去除 段/巷/弄) - 簡易版
+                            const coreRoadName = currentRoadName.replace(/段.*/, '').replace(/\d+號.*/, '');
+                            if (!cam.address.includes(coreRoadName)) {
+                                // 真的不包含，跳過此相機 (視為平行道路)
+                                console.log(`過濾平行道路: 目前在 ${currentRoadName}, 相機在 ${cam.address}`);
+                                continue;
+                            }
+                        }
                     }
                 }
 
