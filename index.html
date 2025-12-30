@@ -111,7 +111,7 @@
             </div>
         </div>
         
-        <!-- 新增：目前路名顯示 -->
+        <!-- 路名顯示 -->
         <div class="mb-2 pb-2 border-b border-gray-700">
             <div class="text-gray-400 text-xs font-bold tracking-wider">目前位置 (OSM)</div>
             <div class="text-sm font-bold text-blue-300 truncate" id="current-road-display">
@@ -277,8 +277,20 @@
         }
 
         function checkProximity(lat, lng, speed = 0, heading = null) {
-            // 每次位置更新嘗試查詢路名
+            // 1. 觸發路名查詢
             fetchRoadName(lat, lng);
+
+            // 2.【關鍵修正】嚴格路名檢查
+            // 如果還沒抓到路名，或者路名未知，則完全不進行警示判斷
+            // 這能確保只有在確定位於哪條路時，才發出通知，避免誤差
+            if (!currentRoadName || currentRoadName === "未知道路") {
+                // 更新狀態顯示，讓使用者知道正在等待路名
+                const roadDisplay = document.getElementById('current-road-display');
+                if (roadDisplay && roadDisplay.innerText === "偵測中...") {
+                    roadDisplay.innerText = "確認路名中...";
+                }
+                return; // ★ 直接返回，不比對距離 ★
+            }
 
             if (cameras.length === 0) return;
             
@@ -291,41 +303,25 @@
                 // 1. 距離過濾
                 if (d > CONFIG.WARN_DIST) continue;
 
-                // 2. 方向過濾 (Vector Logic - 第一道防線)
+                // 2. 方向過濾 (Vector Logic)
                 if (speed > 5 && heading !== null && heading !== undefined) {
                     const bearingToCam = getBearing(lat, lng, cam.lat, cam.lng);
                     let angleDiff = Math.abs(heading - bearingToCam);
                     if (angleDiff > 180) angleDiff = 360 - angleDiff;
                     
-                    // 夾角大於 40 度則忽略
                     if (angleDiff > CONFIG.VIEW_ANGLE) continue; 
                 }
 
-                // 3. 路名比對 (Road Name Match - 第二道防線)
-                // 只有當我們成功抓到路名，且相機地址也有效時才進行比對
-                if (currentRoadName && currentRoadName !== "未知道路" && cam.address) {
-                    // 簡單字串比對：如果相機地址 不包含 目前路名
-                    // 例如：目前在「仁愛路」，相機在「信義路」，則忽略
-                    // 注意：需處理「段」字，例如 "信義路" 應匹配 "信義路五段"
-                    // 策略：如果目前路名是 "信義路五段"，而相機是 "信義路"，這算不符合？
-                    // 寬鬆策略：如果相機地址完全不包含目前路名的前2個字(假設路名大於2字)，則懷疑是平行道路
-                    
-                    // 實作：直接檢查包含關係
-                    // 只有當 currentRoadName 明確且長度足夠時才啟用過濾
+                // 3. 路名比對 (Road Name Match)
+                // 執行到這裡，代表 currentRoadName 已經是有效的了
+                if (cam.address) {
                     if (currentRoadName.length >= 2) {
-                        // 如果相機地址裡面 找不到 目前的路名，就視為不同路
-                        if (!cam.address.includes(currentRoadName)) {
-                            // 特殊處理：有時候 OSM 回傳 "信義路"，相機是 "信義路五段"，這是 Match 的
-                            // 反之 OSM 回傳 "信義路五段"，相機是 "信義路"，這也是 Match 的
-                            // 這裡做一個簡單的雙向檢查，如果兩邊都完全沒交集，才過濾
-                            
-                            // 提取路名核心 (去除 段/巷/弄) - 簡易版
-                            const coreRoadName = currentRoadName.replace(/段.*/, '').replace(/\d+號.*/, '');
-                            if (!cam.address.includes(coreRoadName)) {
-                                // 真的不包含，跳過此相機 (視為平行道路)
-                                console.log(`過濾平行道路: 目前在 ${currentRoadName}, 相機在 ${cam.address}`);
-                                continue;
-                            }
+                        // 簡單包含檢查：相機地址如果不包含目前路名，視為平行道路
+                        // 例如: 目前"仁愛路"，相機"信義路" -> 不包含 -> 忽略
+                        // 寬鬆處理：去除"段"之後的比對
+                        const coreRoadName = currentRoadName.replace(/段.*/, '').replace(/\d+號.*/, '');
+                        if (!cam.address.includes(coreRoadName)) {
+                            continue;
                         }
                     }
                 }
