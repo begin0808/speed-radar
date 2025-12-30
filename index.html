@@ -26,27 +26,25 @@
             border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px);
         }
         
-        /* 左上角只留語音按鈕 */
         #top-left-controls {
             position: fixed; top: 15px; left: 15px;
             z-index: 1000; pointer-events: none;
         }
 
-        /* 新增：右側控制項容器 (位於地圖圖層切換鈕下方) */
         #right-controls {
             position: fixed; 
-            top: 80px; /* 避開右上角 Leaflet 圖層按鈕的高度 */
+            top: 80px;
             right: 10px;
             z-index: 1000; 
             display: flex; 
-            flex-direction: column; /* 垂直排列 */
+            flex-direction: column;
             gap: 10px;
-            pointer-events: none; /* 讓點擊穿透容器，不擋地圖 */
+            pointer-events: none;
             align-items: flex-end;
         }
 
         .btn-control {
-            pointer-events: auto; /* 恢復按鈕可點擊 */
+            pointer-events: auto;
             background: rgba(255, 255, 255, 0.9); color: #1f2937;
             padding: 8px 16px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;
             box-shadow: 0 2px 8px rgba(0,0,0,0.3); border: none; transition: all 0.2s;
@@ -59,7 +57,24 @@
             50% { opacity: 1; border-color: rgba(220, 38, 38, 1); }
             100% { opacity: 0.3; border-color: rgba(220, 38, 38, 0.4); }
         }
-        .camera-icon-img { filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); transition: transform 0.3s; }
+
+        /* --- 相機圖示樣式與顏色切換 --- */
+        .camera-icon-img { 
+            transition: filter 0.3s; /* 顏色切換時有過渡效果 */
+        }
+
+        /* 預設：深色模式下，將黑色圖示轉為白色，才看得見 */
+        .camera-icon-img {
+            filter: invert(100%);
+        }
+
+        /* 街道/淺色模式：將圖示轉為鮮紅色 */
+        .mode-street .camera-icon-img,
+        .mode-light .camera-icon-img {
+            /* 這串魔法數字可以將黑色(#000)轉為紅色(#FF0000) */
+            filter: invert(16%) sepia(99%) saturate(7404%) hue-rotate(4deg) brightness(95%) contrast(118%);
+        }
+
         .leaflet-control-layers { border: none !important; border-radius: 12px !important; box-shadow: 0 2px 10px rgba(0,0,0,0.3) !important; padding: 8px !important; }
         .leaflet-control-layers-toggle { width: 44px !important; height: 44px !important; }
     </style>
@@ -68,14 +83,12 @@
 
     <div id="alert-overlay"></div>
 
-    <!-- 左上角：語音開關 -->
     <div id="top-left-controls">
         <button onclick="enableAudio()" id="btn-audio" class="btn-control">
             🔇 開啟語音
         </button>
     </div>
 
-    <!-- 右側：功能按鈕 (移到地圖選單下方) -->
     <div id="right-controls">
         <button onclick="startGPS()" class="btn-control bg-green-600 text-white! hover:bg-green-700 shadow-lg">
             🛰️ 重啟 GPS
@@ -85,12 +98,12 @@
         </button>
     </div>
 
+    <!-- 地圖容器，我們會在這裡動態加入 class 來切換圖示顏色 -->
     <div id="map"></div>
 
     <div id="dashboard">
         <div class="flex justify-between items-center mb-2">
             <div class="flex items-center gap-2">
-                <!-- GPS 狀態指示燈 -->
                 <span id="gps-indicator" class="w-2 h-2 rounded-full bg-gray-500"></span>
                 <span id="gps-text" class="text-xs text-gray-400">GPS 未啟動</span>
             </div>
@@ -122,7 +135,6 @@
         </div>
     </div>
 
-    <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
     <script>
@@ -136,7 +148,13 @@
             { id: "mock5", address: "基隆路一段 (模擬點)", limit: 50, lat: 25.041000, lng: 121.565000 }
         ];
 
-        const CONFIG = { WARN_DIST: 600, ALERT_DIST: 300, RESET_DIST: 800 };
+        const CONFIG = { 
+            WARN_DIST: 600, 
+            ALERT_DIST: 300, 
+            RESET_DIST: 800,
+            VIEW_ANGLE: 40 
+        };
+        
         let map, userMarker;
         let cameras = [];
         let currentPos = { lat: 25.033964, lng: 121.564468 }; 
@@ -149,7 +167,6 @@
         function init() {
             initMap();
             loadCameras();
-            // 頁面載入後自動嘗試啟動 GPS
             startGPS();
         }
 
@@ -164,10 +181,27 @@
                 attribution: '© OpenStreetMap', maxZoom: 19
             });
 
-            // 預設使用街道模式
+            // 預設使用街道模式，並設定初始 class
+            document.getElementById('map').classList.add('mode-street');
             map = L.map('map', { zoomControl: false, layers: [osmLayer] }).setView([currentPos.lat, currentPos.lng], 15);
             
             L.control.layers({ "深色 (Dark)": darkLayer, "淺色 (Light)": lightLayer, "街道 (Street)": osmLayer }, null, {position: 'topright'}).addTo(map);
+
+            // --- 新增：監聽圖層切換事件，自動變更相機顏色 ---
+            map.on('baselayerchange', function(e) {
+                const mapDiv = document.getElementById('map');
+                // 先移除所有模式 class
+                mapDiv.classList.remove('mode-dark', 'mode-light', 'mode-street');
+                
+                // 根據圖層名稱加入對應 class
+                if (e.name.includes("深色")) {
+                    mapDiv.classList.add('mode-dark'); // 白色相機
+                } else if (e.name.includes("淺色")) {
+                    mapDiv.classList.add('mode-light'); // 紅色相機
+                } else {
+                    mapDiv.classList.add('mode-street'); // 紅色相機
+                }
+            });
 
             const carIcon = L.divIcon({
                 className: 'custom-car',
@@ -211,17 +245,32 @@
             });
         }
 
-        function checkProximity(lat, lng, speed = 0) {
+        function checkProximity(lat, lng, speed = 0, heading = null) {
             if (cameras.length === 0) return;
+            
             let minDist = Infinity;
             let nearestCam = null;
+
             for (let cam of cameras) {
                 const d = getDistance(lat, lng, cam.lat, cam.lng);
+                
+                if (d > CONFIG.WARN_DIST) continue;
+
+                if (speed > 5 && heading !== null && heading !== undefined) {
+                    const bearingToCam = getBearing(lat, lng, cam.lat, cam.lng);
+                    let angleDiff = Math.abs(heading - bearingToCam);
+                    if (angleDiff > 180) angleDiff = 360 - angleDiff;
+                    if (angleDiff > CONFIG.VIEW_ANGLE) {
+                        continue; 
+                    }
+                }
+
                 if (d < minDist) {
                     minDist = d;
                     nearestCam = cam;
                 }
             }
+            
             updateUI(minDist, nearestCam, speed);
             handleVoiceAlert(minDist, nearestCam);
         }
@@ -243,20 +292,21 @@
 
             watchId = navigator.geolocation.watchPosition(
                 (pos) => {
-                    const { latitude, longitude, speed } = pos.coords;
+                    const { latitude, longitude, speed, heading } = pos.coords;
                     currentPos = { lat: latitude, lng: longitude };
+                    
                     userMarker.setLatLng([latitude, longitude]);
                     map.setView([latitude, longitude], 17); 
+                    
                     const kmh = speed ? Math.round(speed * 3.6) : 0;
-                    checkProximity(latitude, longitude, kmh);
+                    checkProximity(latitude, longitude, kmh, heading);
+
                     indicator.className = "w-2 h-2 rounded-full bg-green-500 animate-pulse";
                     text.innerText = "GPS 連線中";
                 },
                 (err) => {
                     indicator.className = "w-2 h-2 rounded-full bg-red-500";
                     let errorMsg = "GPS 定位失敗";
-
-                    // 針對預覽環境權限政策的特殊處理
                     if (err.message && err.message.includes("permissions policy")) {
                         errorMsg = "預覽不支援 GPS (請按模擬)";
                         console.warn("【環境限制】預覽模式不支援 GPS，請使用右側「模擬行駛」功能，或將程式碼下載至本地測試。");
@@ -280,6 +330,9 @@
             const steps = 200;
             let step = 0;
             let mockSpeed = Math.floor(Math.random() * 40) + 40; 
+            
+            const simHeading = getBearing(start.lat, start.lng, targetLatLng.lat, targetLatLng.lng);
+
             simInterval = setInterval(() => {
                 step++;
                 const progress = step / steps;
@@ -288,18 +341,34 @@
                 currentPos = { lat, lng };
                 userMarker.setLatLng([lat, lng]);
                 map.panTo([lat, lng]);
-                checkProximity(lat, lng, mockSpeed);
+                
+                checkProximity(lat, lng, mockSpeed, simHeading);
+                
                 if (step >= steps) { clearInterval(simInterval); isSimulating = false; updateUI(Infinity, null, 0); }
             }, 20);
         }
 
         function toggleSimulation() { alert("點擊地圖模擬行駛"); }
+        
+        function getBearing(lat1, lng1, lat2, lng2) {
+            const dLon = toRad(lng2 - lng1);
+            const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+            const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+                      Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+            let brng = toDeg(Math.atan2(y, x));
+            return (brng + 360) % 360;
+        }
+
+        function toRad(deg) { return deg * Math.PI / 180; }
+        function toDeg(rad) { return rad * 180 / Math.PI; }
+
         function getDistance(lat1, lon1, lat2, lon2) {
             const R = 6371e3;
             const φ1 = lat1 * Math.PI/180, φ2 = lat2 * Math.PI/180;
             const a = Math.sin((lat2-lat1)*Math.PI/360)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin((lon2-lon1)*Math.PI/360)**2;
             return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
         }
+
         function updateUI(dist, cam, speed) {
             document.getElementById('speed-display').innerText = speed;
             const elDist = document.getElementById('distance-display');
