@@ -31,6 +31,7 @@
             z-index: 1000; pointer-events: none;
         }
 
+        /* 右側控制項樣式保留，但 HTML 內容已隱藏 */
         #right-controls {
             position: fixed; 
             top: 80px;
@@ -89,6 +90,8 @@
         </button>
     </div>
 
+    <!-- 右側：功能按鈕 (已隱藏，如需恢復請移除註解符號) -->
+    <!--
     <div id="right-controls">
         <button onclick="startGPS()" class="btn-control bg-green-600 text-white! hover:bg-green-700 shadow-lg">
             🛰️ 重啟 GPS
@@ -97,6 +100,7 @@
             🚗 模擬行駛
         </button>
     </div>
+    -->
 
     <div id="map"></div>
 
