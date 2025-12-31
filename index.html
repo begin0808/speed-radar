@@ -245,7 +245,14 @@
             const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 });
 
             document.getElementById('map').classList.add('mode-street');
-            map = L.map('map', { zoomControl: false, layers: [osmLayer] }).setView([currentPos.lat, currentPos.lng], 15);
+            
+            // 初始化地圖時，加入 zoomSnap: 0.1 允許細微縮放
+            map = L.map('map', { 
+                zoomControl: false, 
+                layers: [osmLayer], 
+                zoomSnap: 0.1 
+            }).setView([currentPos.lat, currentPos.lng], 15);
+            
             L.control.layers({ "深色 (Dark)": darkLayer, "淺色 (Light)": lightLayer, "街道 (Street)": osmLayer }, null, {position: 'topright'}).addTo(map);
 
             map.on('baselayerchange', function(e) {
@@ -433,7 +440,9 @@
                     currentPos = { lat: latitude, lng: longitude };
                     
                     userMarker.setLatLng([latitude, longitude]);
-                    map.setView([latitude, longitude], 17); 
+                    
+                    // 調整為 16.4 的 Zoom Level，視野擴大約 1.5 倍
+                    map.setView([latitude, longitude], 16.4); 
                     
                     const kmh = speed ? Math.round(speed * 3.6) : 0;
                     
