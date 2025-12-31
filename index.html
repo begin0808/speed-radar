@@ -3,7 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>測速照相警示系統 (Road Match Ver.)</title>
+    <!-- 加入 PWA 設定 -->
+    <meta name="theme-color" content="#1a1a1a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3069/3069172.png">
+    
+    <title>小企鵝超速雷達</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -29,19 +36,6 @@
         #top-left-controls {
             position: fixed; top: 15px; left: 15px;
             z-index: 1000; pointer-events: none;
-        }
-
-        /* 右側控制項樣式保留，但 HTML 內容已隱藏 */
-        #right-controls {
-            position: fixed; 
-            top: 80px;
-            right: 10px;
-            z-index: 1000; 
-            display: flex; 
-            flex-direction: column;
-            gap: 10px;
-            pointer-events: none;
-            align-items: flex-end;
         }
 
         .btn-control {
@@ -71,12 +65,13 @@
         .leaflet-control-layers { border: none !important; border-radius: 12px !important; box-shadow: 0 2px 10px rgba(0,0,0,0.3) !important; padding: 8px !important; }
         .leaflet-control-layers-toggle { width: 44px !important; height: 44px !important; }
         
-        /* 路名顯示標籤 */
-        .road-badge {
-            background: #3b82f6; color: white; 
-            padding: 2px 8px; border-radius: 4px; 
-            font-size: 0.75rem; margin-left: 8px;
-            vertical-align: middle;
+        .leaflet-popup-content-wrapper {
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            border-radius: 8px;
+        }
+        .leaflet-popup-tip {
+            background: rgba(0, 0, 0, 0.9);
         }
     </style>
 </head>
@@ -90,18 +85,6 @@
         </button>
     </div>
 
-    <!-- 右側：功能按鈕 (已隱藏，如需恢復請移除註解符號) -->
-    <!--
-    <div id="right-controls">
-        <button onclick="startGPS()" class="btn-control bg-green-600 text-white! hover:bg-green-700 shadow-lg">
-            🛰️ 重啟 GPS
-        </button>
-        <button onclick="toggleSimulation()" class="btn-control bg-blue-600 text-white! hover:bg-blue-700 shadow-lg">
-            🚗 模擬行駛
-        </button>
-    </div>
-    -->
-
     <div id="map"></div>
 
     <div id="dashboard">
@@ -111,7 +94,6 @@
                 <span id="gps-text" class="text-xs text-gray-400">GPS 未啟動</span>
             </div>
             
-            <!-- 新增：Wake Lock 狀態指示 -->
             <div class="flex items-center gap-1 opacity-50" id="wake-lock-status">
                 <span class="text-xs text-gray-400">💡 螢幕恆亮</span>
             </div>
@@ -121,12 +103,10 @@
             </div>
         </div>
         
-        <!-- 路名顯示 -->
-        <div class="mb-2 pb-2 border-b border-gray-700">
-            <div class="text-gray-400 text-xs font-bold tracking-wider">目前位置 (OSM)</div>
-            <div class="text-sm font-bold text-blue-300 truncate" id="current-road-display">
-                偵測中...
-            </div>
+        <!-- 除錯資訊顯示 (方便確認方向是否正確) -->
+        <div class="mb-2 pb-2 border-b border-gray-700 flex justify-between text-xs text-gray-500">
+            <span id="debug-heading">方向: --°</span>
+            <span id="debug-accuracy">精度: --m</span>
         </div>
 
         <div class="flex justify-between items-end">
@@ -155,21 +135,28 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
     <script>
+        // --- 註冊 Service Worker (PWA) ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(reg => console.log('Service Worker 註冊成功', reg.scope))
+                    .catch(err => console.log('Service Worker 註冊失敗', err));
+            });
+        }
+
         const DATA_URL = './cameras.json'; 
 
+        // 模擬資料 (Fallback)
         const MOCK_DATA = [
             { id: "mock1", address: "臺北市信義區信義路五段 (模擬點)", limit: 50, lat: 25.032969, lng: 121.560000 },
-            { id: "mock2", address: "臺北市信義區松高路 (模擬點)", limit: 60, lat: 25.035000, lng: 121.568000 },
-            { id: "mock3", address: "臺北市大安區光復南路 (模擬點)", limit: 40, lat: 25.040000, lng: 121.558000 },
-            { id: "mock4", address: "臺北市信義區莊敬路 (模擬點)", limit: 50, lat: 25.028000, lng: 121.565000 },
-            { id: "mock5", address: "臺北市信義區基隆路一段 (模擬點)", limit: 50, lat: 25.041000, lng: 121.565000 }
+            { id: "mock2", address: "臺北市信義區松高路 (模擬點)", limit: 60, lat: 25.035000, lng: 121.568000 }
         ];
 
         const CONFIG = { 
             WARN_DIST: 600, 
             ALERT_DIST: 300, 
             RESET_DIST: 800,
-            VIEW_ANGLE: 40 
+            VIEW_ANGLE: 45 // 稍微放寬角度到 45 度，避免手機方向不準時漏報
         };
         
         let map, userMarker;
@@ -180,49 +167,28 @@
         let speechState = { hasWarned600: false, hasWarned300: false, currentCameraId: null };
         let isSimulating = false;
         let simInterval;
-        
-        // 路名偵測相關變數
-        let currentRoadName = null;
-        let lastRoadFetchTime = 0;
-        let lastRoadFetchPos = null;
-
-        // Wake Lock
         let wakeLock = null;
 
         function init() {
             initMap();
             loadCameras();
             startGPS();
-            requestWakeLock(); // 啟動螢幕恆亮
+            requestWakeLock();
         }
 
-        // --- Wake Lock API: 保持螢幕開啟 ---
         async function requestWakeLock() {
             try {
                 if ('wakeLock' in navigator) {
                     wakeLock = await navigator.wakeLock.request('screen');
                     updateWakeLockUI(true);
-                    
-                    wakeLock.addEventListener('release', () => {
-                        console.log('Wake Lock released');
-                        updateWakeLockUI(false);
-                    });
-                    console.log('Wake Lock is active');
-                } else {
-                    console.warn('Wake Lock API not supported');
+                    wakeLock.addEventListener('release', () => updateWakeLockUI(false));
                 }
             } catch (err) {
-                // 針對預覽環境權限錯誤的特別處理
-                if (err.name === 'NotAllowedError' && err.message.includes('permissions policy')) {
-                     console.warn('Wake Lock (螢幕恆亮) 因權限政策被停用 (預覽環境限制)。');
-                } else {
-                     console.error(`${err.name}, ${err.message}`);
-                }
+                console.warn('Wake Lock failed:', err.message);
                 updateWakeLockUI(false);
             }
         }
 
-        // 當頁面重新可見時 (例如切換分頁回來)，重新申請鎖定
         document.addEventListener('visibilitychange', async () => {
             if (wakeLock !== null && document.visibilityState === 'visible') {
                 await requestWakeLock();
@@ -247,7 +213,6 @@
             const lightLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { attribution: '© OpenStreetMap, © CartoDB', maxZoom: 19 });
             const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 });
 
-            // 預設使用街道模式
             document.getElementById('map').classList.add('mode-street');
             map = L.map('map', { zoomControl: false, layers: [osmLayer] }).setView([currentPos.lat, currentPos.lng], 15);
             L.control.layers({ "深色 (Dark)": darkLayer, "淺色 (Light)": lightLayer, "街道 (Street)": osmLayer }, null, {position: 'topright'}).addTo(map);
@@ -276,14 +241,14 @@
             const statusTag = document.getElementById('db-status');
             try {
                 const response = await fetch(DATA_URL);
-                if (!response.ok) throw new Error("JSON not found or fetch failed");
+                if (!response.ok) throw new Error("JSON fetch failed");
                 cameras = await response.json();
                 statusTag.innerText = `✅ 已載入: ${cameras.length} 筆資料 (Static)`;
                 statusTag.classList.replace('bg-yellow-700', 'bg-green-700');
             } catch (e) {
-                console.warn("Fetch failed, using mock data. Reason:", e);
+                console.warn("Using mock data:", e);
                 cameras = MOCK_DATA;
-                statusTag.innerText = "⚠️ 預覽模式: 使用模擬資料 (JSON 未載入)";
+                statusTag.innerText = "⚠️ 使用模擬資料 (JSON 未載入)";
                 statusTag.classList.replace('bg-yellow-700', 'bg-blue-600');
             }
             renderCameras();
@@ -292,63 +257,26 @@
         function renderCameras() {
              const icon = L.icon({
                 iconUrl: 'https://cdn-icons-png.flaticon.com/512/3256/3256054.png',
-                iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -10],
+                iconSize: [32, 32], iconAnchor: [16, 16], popupAnchor: [0, -10],
                 className: 'camera-icon-img'
             });
             cameras.forEach(cam => {
+                // 修正彈出視窗內容
+                const addressText = cam.address ? cam.address : "地址未知";
+                const regionText = cam.region ? `[${cam.region}] ` : "";
+                
                 L.marker([cam.lat, cam.lng], {icon: icon})
-                    .bindPopup(`<div class="text-black font-bold">${cam.address}<br>限速: ${cam.limit}</div>`)
+                    .bindPopup(`
+                        <div class="text-center">
+                            <div class="text-xl font-bold text-red-400 mb-1">${cam.limit} <span class="text-sm text-white">km/h</span></div>
+                            <div class="text-sm text-gray-300 border-t border-gray-600 pt-1 mt-1">${regionText}${addressText}</div>
+                        </div>
+                    `)
                     .addTo(map);
             });
         }
 
-        // --- 路名查詢功能 (使用 OSM Nominatim API) ---
-        async function fetchRoadName(lat, lng) {
-            const now = Date.now();
-            // 節流閥：每 10 秒或移動 > 50m 才查詢一次，避免 API 封鎖
-            if (now - lastRoadFetchTime < 10000 && lastRoadFetchPos && getDistance(lat, lng, lastRoadFetchPos.lat, lastRoadFetchPos.lng) < 50) {
-                return;
-            }
-
-            lastRoadFetchTime = now;
-            lastRoadFetchPos = { lat, lng };
-
-            try {
-                // 使用 OpenStreetMap 免費 API 查詢地址
-                const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1&accept-language=zh-TW`;
-                const response = await fetch(url);
-                const data = await response.json();
-                
-                if (data && data.address) {
-                    // 優先取得道路名稱
-                    const road = data.address.road || data.address.pedestrian || data.address.street || "未知道路";
-                    currentRoadName = road;
-                    
-                    // 更新 UI
-                    const roadDisplay = document.getElementById('current-road-display');
-                    roadDisplay.innerText = road;
-                    roadDisplay.classList.remove('text-gray-500');
-                    roadDisplay.classList.add('text-blue-300');
-                }
-            } catch (e) {
-                console.warn("路名查詢失敗:", e);
-                // 失敗時不清除舊路名，避免閃爍
-            }
-        }
-
         function checkProximity(lat, lng, speed = 0, heading = null) {
-            // 1. 觸發路名查詢
-            fetchRoadName(lat, lng);
-
-            // 2.【關鍵修正】嚴格路名檢查
-            if (!currentRoadName || currentRoadName === "未知道路") {
-                const roadDisplay = document.getElementById('current-road-display');
-                if (roadDisplay && roadDisplay.innerText === "偵測中...") {
-                    roadDisplay.innerText = "確認路名中...";
-                }
-                return; 
-            }
-
             if (cameras.length === 0) return;
             
             let minDist = Infinity;
@@ -357,26 +285,17 @@
             for (let cam of cameras) {
                 const d = getDistance(lat, lng, cam.lat, cam.lng);
                 
-                // 1. 距離過濾
                 if (d > CONFIG.WARN_DIST) continue;
 
-                // 2. 方向過濾 (Vector Logic)
+                // 方向判斷邏輯 (Vector Check)
+                // 只有當車輛有一定速度且有方向時才過濾
                 if (speed > 5 && heading !== null && heading !== undefined) {
                     const bearingToCam = getBearing(lat, lng, cam.lat, cam.lng);
                     let angleDiff = Math.abs(heading - bearingToCam);
                     if (angleDiff > 180) angleDiff = 360 - angleDiff;
                     
+                    // 如果相機在視野範圍外，跳過
                     if (angleDiff > CONFIG.VIEW_ANGLE) continue; 
-                }
-
-                // 3. 路名比對 (Road Name Match)
-                if (cam.address) {
-                    if (currentRoadName.length >= 2) {
-                        const coreRoadName = currentRoadName.replace(/段.*/, '').replace(/\d+號.*/, '');
-                        if (!cam.address.includes(coreRoadName)) {
-                            continue;
-                        }
-                    }
                 }
 
                 if (d < minDist) {
@@ -394,6 +313,8 @@
 
             const indicator = document.getElementById('gps-indicator');
             const text = document.getElementById('gps-text');
+            const debugHeading = document.getElementById('debug-heading');
+            const debugAccuracy = document.getElementById('debug-accuracy');
 
             indicator.className = "w-2 h-2 rounded-full bg-yellow-500 animate-pulse";
             text.innerText = "GPS 定位中...";
@@ -406,13 +327,18 @@
 
             watchId = navigator.geolocation.watchPosition(
                 (pos) => {
-                    const { latitude, longitude, speed, heading } = pos.coords;
+                    const { latitude, longitude, speed, heading, accuracy } = pos.coords;
                     currentPos = { lat: latitude, lng: longitude };
                     
                     userMarker.setLatLng([latitude, longitude]);
                     map.setView([latitude, longitude], 17); 
                     
                     const kmh = speed ? Math.round(speed * 3.6) : 0;
+                    
+                    // 更新除錯資訊
+                    debugHeading.innerText = `方向: ${heading !== null ? Math.round(heading) + '°' : '無'}`;
+                    debugAccuracy.innerText = `精度: ${Math.round(accuracy)}m`;
+
                     checkProximity(latitude, longitude, kmh, heading);
 
                     indicator.className = "w-2 h-2 rounded-full bg-green-500 animate-pulse";
@@ -423,14 +349,9 @@
                     let errorMsg = "GPS 定位失敗";
                     if (err.message && err.message.includes("permissions policy")) {
                         errorMsg = "預覽不支援 GPS (請按模擬)";
-                        console.warn("【環境限制】預覽模式不支援 GPS，請使用右側「模擬行駛」功能，或將程式碼下載至本地測試。");
                     } else {
-                        console.error("GPS Error Details:", { code: err.code, message: err.message });
-                        switch(err.code) {
-                            case 1: errorMsg = "GPS 權限被拒絕"; break;
-                            case 2: errorMsg = "訊號微弱或無硬體"; break;
-                            case 3: errorMsg = "GPS 定位逾時"; break;
-                        }
+                        console.error("GPS Error:", err);
+                        if (err.code === 1) errorMsg = "GPS 權限被拒絕";
                     }
                     text.innerText = errorMsg;
                 }, 
@@ -444,7 +365,6 @@
             const steps = 200;
             let step = 0;
             let mockSpeed = Math.floor(Math.random() * 40) + 40; 
-            
             const simHeading = getBearing(start.lat, start.lng, targetLatLng.lat, targetLatLng.lng);
 
             simInterval = setInterval(() => {
