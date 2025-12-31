@@ -38,12 +38,25 @@
             z-index: 1000; pointer-events: none;
         }
 
+        /* 恢復顯示右側按鈕 */
+        #right-controls {
+            position: fixed; 
+            top: 80px;
+            right: 10px;
+            z-index: 1000; 
+            display: flex; 
+            flex-direction: column;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
         .btn-control {
             pointer-events: auto;
             background: rgba(255, 255, 255, 0.9); color: #1f2937;
             padding: 8px 16px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;
             box-shadow: 0 2px 8px rgba(0,0,0,0.3); border: none; transition: all 0.2s;
             display: flex; align-items: center; gap: 6px;
+            cursor: pointer;
         }
         .btn-control:active { transform: scale(0.95); }
         
@@ -87,6 +100,16 @@
     <div id="top-left-controls">
         <button onclick="enableAudio()" id="btn-audio" class="btn-control">
             🔇 開啟語音
+        </button>
+    </div>
+
+    <!-- 右側：功能按鈕 -->
+    <div id="right-controls">
+        <button onclick="startGPS()" class="btn-control bg-green-600 text-white! hover:bg-green-700 shadow-lg">
+            🛰️ 重啟 GPS
+        </button>
+        <button onclick="toggleSimulation()" class="btn-control bg-blue-600 text-white! hover:bg-blue-700 shadow-lg">
+            🚗 模擬行駛
         </button>
     </div>
 
@@ -220,7 +243,14 @@
             const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 });
 
             document.getElementById('map').classList.add('mode-street');
-            map = L.map('map', { zoomControl: false, layers: [osmLayer], zoomSnap: 0.1 }).setView([currentPos.lat, currentPos.lng], 15);
+            
+            // 地圖初始縮放
+            map = L.map('map', { 
+                zoomControl: false, 
+                layers: [osmLayer], 
+                zoomSnap: 0.1 
+            }).setView([currentPos.lat, currentPos.lng], 15.9);
+            
             L.control.layers({ "深色 (Dark)": darkLayer, "淺色 (Light)": lightLayer, "街道 (Street)": osmLayer }, null, {position: 'topright'}).addTo(map);
 
             map.on('baselayerchange', function(e) {
@@ -238,7 +268,14 @@
             });
             userMarker = L.marker([currentPos.lat, currentPos.lng], {icon: carIcon, zIndexOffset: 1000}).addTo(map);
 
-            map.on('click', (e) => { if(!watchId) startSimulation(e.latlng); });
+            map.on('click', (e) => { 
+                // 只有當 watchId 為空時 (代表 GPS 關閉) 才允許點擊模擬
+                if(!watchId) startSimulation(e.latlng); 
+                else {
+                    // 如果 GPS 開著，點擊地圖時提醒使用者
+                    alert("GPS 運行中。請先點擊右側「🚗 模擬行駛」按鈕切換模式。");
+                }
+            });
         }
 
         async function loadCameras() {
@@ -338,7 +375,6 @@
             } catch (e) { }
         }
 
-        // --- 核心過濾邏輯 ---
         function checkProximity(lat, lng, speed = 0, heading = null) {
             fetchRoadName(lat, lng);
 
@@ -350,24 +386,17 @@
             for (let cam of cameras) {
                 const d = getDistance(lat, lng, cam.lat, cam.lng);
                 
-                // 1. 基礎距離過濾
                 if (d > CONFIG.WARN_DIST) continue;
 
                 let isThreat = true;
                 const hasDirectionData = typeof cam.direction !== 'undefined';
                 const hasHeadingData = speed > 5 && heading !== null;
 
-                // --- 雙軌制過濾 ---
-                
                 if (hasDirectionData && hasHeadingData) {
-                    // [軌道一] 有方向資料：使用精準的向量/扇形過濾
-                    
-                    // Layer 2: 方向性過濾
                     let headingDiff = Math.abs(heading - cam.direction);
                     if (headingDiff > 180) headingDiff = 360 - headingDiff;
                     if (headingDiff > CONFIG.HEADING_TOLERANCE) isThreat = false;
 
-                    // Layer 3: 扇形偵測
                     if (isThreat) {
                         const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
                         const expectedUpstreamBearing = (cam.direction + 180) % 360;
@@ -377,18 +406,11 @@
                     }
                 } 
                 else {
-                    // [軌道二] 無方向資料：降級使用「路名過濾」做最後防線
-                    // 解決：相機方向未知，導致平行道路誤報
-                    
                     if (currentRoadName && currentRoadName !== "未知道路" && cam.address) {
-                        // 移除段/巷/號，只比對路名主體 (例如 "仁愛路" vs "信義路")
                         const userRoadBase = currentRoadName.replace(/(段|巷|弄|號).*/, '');
                         const camRoadBase = cam.address.replace(/(段|巷|弄|號).*/, '');
-                        
-                        // 只有當路名長度足夠 (>1) 且完全不匹配時，才視為不威脅
                         if (userRoadBase.length > 1 && !cam.address.includes(userRoadBase) && !currentRoadName.includes(camRoadBase)) {
                             isThreat = false;
-                            // console.log(`過濾平行道路: 用戶在 ${userRoadBase}, 相機在 ${camRoadBase}`);
                         }
                     }
                 }
@@ -406,6 +428,7 @@
         }
 
         function startGPS() {
+            // 如果正在模擬，先停止
             if (isSimulating) { clearInterval(simInterval); isSimulating = false; }
 
             const indicator = document.getElementById('gps-indicator');
@@ -428,7 +451,9 @@
                     currentPos = { lat: latitude, lng: longitude };
                     
                     userMarker.setLatLng([latitude, longitude]);
-                    map.setView([latitude, longitude], 16.4); 
+                    
+                    // 修正：將 Zoom Level 設為 15.9 (面積約為原本 17 的 2 倍大)
+                    map.setView([latitude, longitude], 15.9); 
                     
                     const kmh = speed ? Math.round(speed * 3.6) : 0;
                     
@@ -455,6 +480,25 @@
             );
         }
 
+        // --- 切換模擬模式功能 (關鍵修正) ---
+        function toggleSimulation() {
+            if (watchId) {
+                // 如果 GPS 正在運行，強制關閉它
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+                
+                // 更新 UI 提示
+                const indicator = document.getElementById('gps-indicator');
+                const text = document.getElementById('gps-text');
+                indicator.className = "w-2 h-2 rounded-full bg-blue-500 animate-pulse";
+                text.innerText = "模擬模式 (請點地圖)";
+                
+                alert("已切換至模擬模式。\n\n現在請點擊地圖上的任意位置，藍色車輛將會開始模擬行駛。");
+            } else {
+                alert("目前已是模擬模式，請直接點擊地圖開始行駛。");
+            }
+        }
+
         function startSimulation(targetLatLng) {
             isSimulating = true;
             const start = currentPos;
@@ -477,8 +521,6 @@
                 if (step >= steps) { clearInterval(simInterval); isSimulating = false; updateUI(Infinity, null, 0); }
             }, 20);
         }
-
-        function toggleSimulation() { alert("點擊地圖模擬行駛"); }
         
         function getBearing(lat1, lng1, lat2, lng2) {
             const dLon = toRad(lng2 - lng1);
