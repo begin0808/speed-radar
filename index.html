@@ -94,10 +94,18 @@
             </div>
         </div>
         
-        <!-- 除錯資訊顯示 (方便確認方向是否正確) -->
-        <div class="mb-2 pb-2 border-b border-gray-700 flex justify-between text-xs text-gray-500">
-            <span id="debug-heading">方向: --°</span>
-            <span id="debug-accuracy">精度: --m</span>
+        <!-- 新增：目前道路顯示區 -->
+        <div class="mb-2 pb-2 border-b border-gray-700">
+            <div class="flex justify-between items-end">
+                <div class="text-gray-400 text-xs font-bold tracking-wider">目前位置</div>
+                <!-- 除錯資訊：方向與精度 -->
+                <div class="text-[10px] text-gray-500">
+                    <span id="debug-heading">--°</span> / <span id="debug-accuracy">--m</span>
+                </div>
+            </div>
+            <div class="text-lg font-bold text-blue-300 truncate mt-1" id="current-road-display">
+                偵測中...
+            </div>
         </div>
 
         <div class="flex justify-between items-end">
@@ -139,15 +147,16 @@
 
         // 模擬資料 (Fallback)
         const MOCK_DATA = [
-            { id: "mock1", address: "臺北市信義區信義路五段 (模擬點)", limit: 50, lat: 25.032969, lng: 121.560000 },
-            { id: "mock2", address: "臺北市信義區松高路 (模擬點)", limit: 60, lat: 25.035000, lng: 121.568000 }
+            { id: "mock1", address: "臺北市信義區信義路五段", limit: 50, lat: 25.032969, lng: 121.560000 },
+            { id: "mock2", address: "臺北市信義區松高路", limit: 60, lat: 25.035000, lng: 121.568000 },
+            { id: "mock3", address: "臺北市大安區仁愛路四段", limit: 50, lat: 25.037500, lng: 121.550000 }
         ];
 
         const CONFIG = { 
             WARN_DIST: 600, 
             ALERT_DIST: 300, 
             RESET_DIST: 800,
-            VIEW_ANGLE: 45 // 稍微放寬角度到 45 度，避免手機方向不準時漏報
+            VIEW_ANGLE: 40 
         };
         
         let map, userMarker;
@@ -159,6 +168,11 @@
         let isSimulating = false;
         let simInterval;
         let wakeLock = null;
+
+        // 路名偵測相關變數
+        let currentRoadName = null;
+        let lastRoadFetchTime = 0;
+        let lastRoadFetchPos = null;
 
         function init() {
             initMap();
@@ -208,8 +222,6 @@
             map = L.map('map', { zoomControl: false, layers: [osmLayer] }).setView([currentPos.lat, currentPos.lng], 15);
             L.control.layers({ "深色 (Dark)": darkLayer, "淺色 (Light)": lightLayer, "街道 (Street)": osmLayer }, null, {position: 'topright'}).addTo(map);
 
-            // 移除舊的圖層切換事件監聽器，因為現在圖示是固定的紅底白字，不需要隨圖層變色
-            
             const carIcon = L.divIcon({
                 className: 'custom-car',
                 html: `<div style="background:#3B82F6; width:24px; height:24px; border-radius:50%; border:3px solid white; box-shadow:0 0 15px #3B82F6;"></div>`,
@@ -240,9 +252,8 @@
         }
 
         function renderCameras() {
-             // 使用 L.divIcon 繪製紅底白圖示 (內嵌 SVG)
              const icon = L.divIcon({
-                className: 'custom-camera-icon', // 自定義 class，避免 Leaflet 預設樣式
+                className: 'custom-camera-icon', 
                 html: `<div class="w-8 h-8 bg-red-600 rounded-full flex items-center justify-center shadow-lg border-2 border-white">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5 text-white">
                           <path d="M12 9a3.75 3.75 0 100 7.5A3.75 3.75 0 0012 9z" />
@@ -255,7 +266,6 @@
             });
 
             cameras.forEach(cam => {
-                // 修正彈出視窗內容
                 const addressText = cam.address ? cam.address : "地址未知";
                 const regionText = cam.region ? `[${cam.region}] ` : "";
                 
@@ -270,7 +280,43 @@
             });
         }
 
+        // --- 核心：路名查詢 (Reverse Geocoding) ---
+        async function fetchRoadName(lat, lng) {
+            const now = Date.now();
+            // 節流閥：每 5 秒或移動 > 30m 才查詢一次 (稍微放寬以提高反應)
+            if (now - lastRoadFetchTime < 5000 && lastRoadFetchPos && getDistance(lat, lng, lastRoadFetchPos.lat, lastRoadFetchPos.lng) < 30) {
+                return;
+            }
+
+            lastRoadFetchTime = now;
+            lastRoadFetchPos = { lat, lng };
+
+            try {
+                // 使用 OpenStreetMap 免費 API 查詢地址
+                const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1&accept-language=zh-TW`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data && data.address) {
+                    // 優先取得道路名稱
+                    const road = data.address.road || data.address.pedestrian || data.address.street || "未知道路";
+                    currentRoadName = road;
+                    
+                    // 更新 UI
+                    const roadDisplay = document.getElementById('current-road-display');
+                    roadDisplay.innerText = road;
+                    roadDisplay.classList.remove('text-gray-500');
+                    roadDisplay.classList.add('text-blue-300');
+                }
+            } catch (e) {
+                // 網路錯誤時不清除舊路名
+            }
+        }
+
         function checkProximity(lat, lng, speed = 0, heading = null) {
+            // 1. 觸發路名查詢
+            fetchRoadName(lat, lng);
+
             if (cameras.length === 0) return;
             
             let minDist = Infinity;
@@ -281,20 +327,42 @@
                 
                 if (d > CONFIG.WARN_DIST) continue;
 
-                // 方向判斷邏輯 (Vector Check)
-                // 只有當車輛有一定速度且有方向時才過濾
-                if (speed > 5 && heading !== null && heading !== undefined) {
+                // --- 2. 智慧過濾邏輯 ---
+                let isMatch = true;
+
+                // A. 路名比對 (最優先)
+                // 如果目前有抓到路名，且相機地址有效，則優先比對路名
+                if (currentRoadName && currentRoadName !== "未知道路" && cam.address) {
+                    // 簡易模糊比對：移除「段」、「巷」、「號」之後的字
+                    // 例如 "信義路五段" -> "信義路"
+                    const currentBase = currentRoadName.replace(/(段|巷|弄|號).*/, '');
+                    const camBase = cam.address.replace(/(段|巷|弄|號).*/, '');
+                    
+                    // 如果基本路名長度 > 1 且 不包含彼此，視為不同路 -> 忽略
+                    if (currentBase.length > 1 && !cam.address.includes(currentBase) && !currentRoadName.includes(camBase)) {
+                        isMatch = false; 
+                        // console.log(`路名不符: ${currentRoadName} vs ${cam.address}`);
+                    }
+                } 
+                
+                // B. 方向比對 (輔助)
+                // 如果路名沒抓到(或比對通過)，再用方向來雙重確認 (特別是高架/平面重疊時)
+                if (isMatch && speed > 5 && heading !== null && heading !== undefined) {
                     const bearingToCam = getBearing(lat, lng, cam.lat, cam.lng);
                     let angleDiff = Math.abs(heading - bearingToCam);
                     if (angleDiff > 180) angleDiff = 360 - angleDiff;
                     
-                    // 如果相機在視野範圍外，跳過
-                    if (angleDiff > CONFIG.VIEW_ANGLE) continue; 
+                    // 視角過濾
+                    if (angleDiff > CONFIG.VIEW_ANGLE) {
+                        isMatch = false;
+                    }
                 }
 
-                if (d < minDist) {
-                    minDist = d;
-                    nearestCam = cam;
+                if (isMatch) {
+                    if (d < minDist) {
+                        minDist = d;
+                        nearestCam = cam;
+                    }
                 }
             }
             
@@ -329,7 +397,6 @@
                     
                     const kmh = speed ? Math.round(speed * 3.6) : 0;
                     
-                    // 更新除錯資訊
                     debugHeading.innerText = `方向: ${heading !== null ? Math.round(heading) + '°' : '無'}`;
                     debugAccuracy.innerText = `精度: ${Math.round(accuracy)}m`;
 
