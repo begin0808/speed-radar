@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3069/3069172.png">
     
-    <title>小企鵝超速雷達 (Hybrid Logic)</title>
+    <title>小企鵝超速雷達 (Debug Ver.)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -38,7 +38,6 @@
             z-index: 1000; pointer-events: none;
         }
 
-        /* 恢復顯示右側按鈕 */
         #right-controls {
             position: fixed; 
             top: 80px;
@@ -141,6 +140,10 @@
             <div class="text-lg font-bold text-blue-300 truncate mt-1" id="current-road-display">
                 偵測中...
             </div>
+            <!-- 新增：偵測除錯資訊 -->
+            <div class="text-[10px] text-yellow-500 mt-1 truncate" id="detection-debug-info">
+                等待移動...
+            </div>
         </div>
 
         <div class="flex justify-between items-end">
@@ -182,15 +185,16 @@
             { id: "mock2", address: "臺北市信義區松高路", limit: 60, lat: 25.035000, lng: 121.568000, direction: 270 }
         ];
 
+        // 放寬參數設定，提升偵測成功率
         const CONFIG = { 
             WARN_DIST: 600, 
             ALERT_DIST: 300, 
             RESET_DIST: 800,
-            HEADING_TOLERANCE: 30, 
-            CONE_ANGLE: 45 
+            HEADING_TOLERANCE: 60, // 放寬至 60 度 (原 30)
+            CONE_ANGLE: 60         // 放寬至 60 度 (原 45)
         };
         
-        let map, userMarker;
+        let map, userMarker, pathLine;
         let cameras = [];
         let currentPos = { lat: 25.033964, lng: 121.564468 }; 
         let watchId = null;
@@ -244,7 +248,6 @@
 
             document.getElementById('map').classList.add('mode-street');
             
-            // 地圖初始縮放
             map = L.map('map', { 
                 zoomControl: false, 
                 layers: [osmLayer], 
@@ -269,12 +272,8 @@
             userMarker = L.marker([currentPos.lat, currentPos.lng], {icon: carIcon, zIndexOffset: 1000}).addTo(map);
 
             map.on('click', (e) => { 
-                // 只有當 watchId 為空時 (代表 GPS 關閉) 才允許點擊模擬
                 if(!watchId) startSimulation(e.latlng); 
-                else {
-                    // 如果 GPS 開著，點擊地圖時提醒使用者
-                    alert("GPS 運行中。請先點擊右側「🚗 模擬行駛」按鈕切換模式。");
-                }
+                else alert("GPS 運行中。請先點擊右側「🚗 模擬行駛」按鈕切換模式。");
             });
         }
 
@@ -311,10 +310,10 @@
                     const rightPoint = [cam.lat + r * Math.cos(rightAngle), cam.lng + r * Math.sin(rightAngle)];
                     
                     L.polygon([center, leftPoint, rightPoint], {
-                        color: 'yellow',
+                        color: '#F59E0B',
                         weight: 1,
-                        fillColor: 'yellow',
-                        fillOpacity: 0.15,
+                        fillColor: '#FCD34D',
+                        fillOpacity: 0.2,
                         dashArray: '5, 5'
                     }).addTo(map);
                 }
@@ -382,27 +381,47 @@
             
             let minDist = Infinity;
             let nearestCam = null;
+            let debugMsg = ""; // 用於記錄最近相機的判定原因
+
+            // 先找出絕對距離最近的相機 (無論方向) 用於除錯顯示
+            let absNearest = null;
+            let absMinDist = Infinity;
 
             for (let cam of cameras) {
                 const d = getDistance(lat, lng, cam.lat, cam.lng);
                 
+                if (d < absMinDist) {
+                    absMinDist = d;
+                    absNearest = cam;
+                }
+
                 if (d > CONFIG.WARN_DIST) continue;
 
                 let isThreat = true;
+                let failReason = "";
+
                 const hasDirectionData = typeof cam.direction !== 'undefined';
                 const hasHeadingData = speed > 5 && heading !== null;
 
                 if (hasDirectionData && hasHeadingData) {
+                    // Layer 2: 方向性過濾
                     let headingDiff = Math.abs(heading - cam.direction);
                     if (headingDiff > 180) headingDiff = 360 - headingDiff;
-                    if (headingDiff > CONFIG.HEADING_TOLERANCE) isThreat = false;
+                    if (headingDiff > CONFIG.HEADING_TOLERANCE) {
+                        isThreat = false;
+                        failReason = `角度偏 ${Math.round(headingDiff)}°`;
+                    }
 
+                    // Layer 3: 扇形偵測
                     if (isThreat) {
                         const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
                         const expectedUpstreamBearing = (cam.direction + 180) % 360;
                         let positionDiff = Math.abs(bearingCamToCar - expectedUpstreamBearing);
                         if (positionDiff > 180) positionDiff = 360 - positionDiff;
-                        if (positionDiff > CONFIG.CONE_ANGLE) isThreat = false;
+                        if (positionDiff > CONFIG.CONE_ANGLE) {
+                            isThreat = false;
+                            failReason = "不在扇形區";
+                        }
                     }
                 } 
                 else {
@@ -411,8 +430,13 @@
                         const camRoadBase = cam.address.replace(/(段|巷|弄|號).*/, '');
                         if (userRoadBase.length > 1 && !cam.address.includes(userRoadBase) && !currentRoadName.includes(camRoadBase)) {
                             isThreat = false;
+                            failReason = "路名不符";
                         }
                     }
+                }
+
+                if (cam === absNearest && !isThreat) {
+                    debugMsg = `忽略原因: ${failReason}`;
                 }
 
                 if (isThreat) {
@@ -423,13 +447,29 @@
                 }
             }
             
+            // 更新除錯訊息
+            const debugEl = document.getElementById('detection-debug-info');
+            if (nearestCam) {
+                debugEl.innerText = `鎖定: ${nearestCam.limit}k (${Math.round(minDist)}m)`;
+                debugEl.className = "text-[10px] text-green-400 mt-1 truncate";
+            } else if (absNearest && absMinDist < 800) {
+                debugEl.innerText = `最近 ${Math.round(absMinDist)}m (${absNearest.address}) - ${debugMsg}`;
+                debugEl.className = "text-[10px] text-gray-400 mt-1 truncate";
+            } else {
+                debugEl.innerText = "範圍內無測速";
+                debugEl.className = "text-[10px] text-gray-500 mt-1 truncate";
+            }
+            
             updateUI(minDist, nearestCam, speed);
             handleVoiceAlert(minDist, nearestCam);
         }
 
         function startGPS() {
-            // 如果正在模擬，先停止
-            if (isSimulating) { clearInterval(simInterval); isSimulating = false; }
+            if (isSimulating) { 
+                clearInterval(simInterval); 
+                isSimulating = false; 
+                if(pathLine) map.removeLayer(pathLine);
+            }
 
             const indicator = document.getElementById('gps-indicator');
             const text = document.getElementById('gps-text');
@@ -451,8 +491,6 @@
                     currentPos = { lat: latitude, lng: longitude };
                     
                     userMarker.setLatLng([latitude, longitude]);
-                    
-                    // 修正：將 Zoom Level 設為 15.9 (面積約為原本 17 的 2 倍大)
                     map.setView([latitude, longitude], 15.9); 
                     
                     const kmh = speed ? Math.round(speed * 3.6) : 0;
@@ -480,22 +518,15 @@
             );
         }
 
-        // --- 切換模擬模式功能 (關鍵修正) ---
         function toggleSimulation() {
             if (watchId) {
-                // 如果 GPS 正在運行，強制關閉它
                 navigator.geolocation.clearWatch(watchId);
                 watchId = null;
-                
-                // 更新 UI 提示
-                const indicator = document.getElementById('gps-indicator');
-                const text = document.getElementById('gps-text');
-                indicator.className = "w-2 h-2 rounded-full bg-blue-500 animate-pulse";
-                text.innerText = "模擬模式 (請點地圖)";
-                
-                alert("已切換至模擬模式。\n\n現在請點擊地圖上的任意位置，藍色車輛將會開始模擬行駛。");
+                document.getElementById('gps-indicator').className = "w-2 h-2 rounded-full bg-blue-500 animate-pulse";
+                document.getElementById('gps-text').innerText = "模擬模式 (請點地圖)";
+                alert("已切換至模擬模式。\n\n請點擊地圖任意位置，車輛將前往該處。");
             } else {
-                alert("目前已是模擬模式，請直接點擊地圖開始行駛。");
+                alert("已是模擬模式，請直接點擊地圖。");
             }
         }
 
@@ -507,6 +538,10 @@
             let mockSpeed = Math.floor(Math.random() * 40) + 40; 
             const simHeading = getBearing(start.lat, start.lng, targetLatLng.lat, targetLatLng.lng);
 
+            // 繪製模擬路徑線
+            if(pathLine) map.removeLayer(pathLine);
+            pathLine = L.polyline([start, targetLatLng], {color: 'blue', dashArray: '5, 10'}).addTo(map);
+
             simInterval = setInterval(() => {
                 step++;
                 const progress = step / steps;
@@ -516,10 +551,18 @@
                 userMarker.setLatLng([lat, lng]);
                 map.panTo([lat, lng]);
                 
+                // 更新除錯面板的方向顯示
+                document.getElementById('debug-heading').innerText = `方向: ${Math.round(simHeading)}°`;
+                
                 checkProximity(lat, lng, mockSpeed, simHeading);
                 
-                if (step >= steps) { clearInterval(simInterval); isSimulating = false; updateUI(Infinity, null, 0); }
-            }, 20);
+                if (step >= steps) { 
+                    clearInterval(simInterval); 
+                    isSimulating = false; 
+                    updateUI(Infinity, null, 0); 
+                    if(pathLine) map.removeLayer(pathLine); // 到達後移除線條
+                }
+            }, 50); // 稍微放慢一點模擬速度以便觀察
         }
         
         function getBearing(lat1, lng1, lat2, lng2) {
