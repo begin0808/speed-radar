@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3069/3069172.png">
     
-    <title>小企鵝超速雷達 (Layer 3 Logic)</title>
+    <title>小企鵝超速雷達 (Visual Cone)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -65,17 +65,17 @@
             background: rgba(0, 0, 0, 0.9);
         }
         
-        /* 箭頭樣式，用於顯示相機方向 */
+        /* 箭頭樣式 */
         .camera-direction-arrow {
             position: absolute;
             top: 50%; left: 50%;
             width: 0; height: 0;
             border-left: 6px solid transparent;
             border-right: 6px solid transparent;
-            border-bottom: 14px solid #FACC15; /* 黃色箭頭，加大一點更明顯 */
+            border-bottom: 14px solid #FACC15; 
             transform-origin: center bottom;
             margin-left: -6px;
-            margin-top: -20px; /* 調整位置到相機圖示上方 */
+            margin-top: -20px;
             z-index: 10;
             filter: drop-shadow(0 2px 2px rgba(0,0,0,0.5));
         }
@@ -109,11 +109,9 @@
             </div>
         </div>
         
-        <!-- 新增：目前道路顯示區 -->
         <div class="mb-2 pb-2 border-b border-gray-700">
             <div class="flex justify-between items-end">
                 <div class="text-gray-400 text-xs font-bold tracking-wider">目前位置</div>
-                <!-- 除錯資訊：方向與精度 -->
                 <div class="text-[10px] text-gray-500">
                     <span id="debug-heading">--°</span> / <span id="debug-accuracy">--m</span>
                 </div>
@@ -151,39 +149,24 @@
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw.js')
-                    .then(reg => console.log('Service Worker 註冊成功', reg.scope))
-                    .catch(err => console.log('Service Worker 註冊失敗', err));
+                navigator.serviceWorker.register('./sw.js').catch(() => {});
             });
         }
 
         const DATA_URL = './cameras.json'; 
 
-        // 模擬資料 (加入 direction: 車流方向 0-360)
-        // 假設：信義路(東西向，往東為90)，光復南路(南北向，往北為0)
+        // 模擬資料 (包含方向與路名)
         const MOCK_DATA = [
-            // 信義路往東 (90度)
-            { id: "mock1", address: "臺北市信義區信義路五段", limit: 50, lat: 25.032969, lng: 121.560000, direction: 90 },
-            // 松高路往西 (270度)
-            { id: "mock2", address: "臺北市信義區松高路", limit: 60, lat: 25.035000, lng: 121.568000, direction: 270 },
-            // 光復南路往北 (0度)
-            { id: "mock3", address: "臺北市大安區光復南路", limit: 40, lat: 25.040000, lng: 121.558000, direction: 0 },
-            // 莊敬路往南 (180度)
-            { id: "mock4", address: "臺北市信義區莊敬路", limit: 50, lat: 25.028000, lng: 121.565000, direction: 180 }
+            { id: "mock1", address: "信義路五段", road_name: "信義路", limit: 50, lat: 25.032969, lng: 121.560000, direction: 90 },
+            { id: "mock2", address: "松高路", road_name: "松高路", limit: 60, lat: 25.035000, lng: 121.568000, direction: 270 },
+            { id: "mock3", address: "光復南路", road_name: "光復南路", limit: 40, lat: 25.040000, lng: 121.558000, direction: 0 }
         ];
 
-        // 參數設定 (業界標準邏輯)
         const CONFIG = { 
             WARN_DIST: 600, 
             ALERT_DIST: 300, 
             RESET_DIST: 800,
-            
-            // Layer 2: 方向平行容許誤差 (CarHeading vs CamDirection)
-            // 30度通常足夠過濾掉垂直與對向車道
             HEADING_TOLERANCE: 30, 
-            
-            // Layer 3: 上游扇形偵測區角度 (Cone of Detection)
-            // 車子必須在相機的「上游」+/- 此角度內，才視為有效目標
             CONE_ANGLE: 45 
         };
         
@@ -196,8 +179,6 @@
         let isSimulating = false;
         let simInterval;
         let wakeLock = null;
-
-        // 路名偵測相關變數
         let currentRoadName = null;
         let lastRoadFetchTime = 0;
         let lastRoadFetchPos = null;
@@ -216,16 +197,11 @@
                     updateWakeLockUI(true);
                     wakeLock.addEventListener('release', () => updateWakeLockUI(false));
                 }
-            } catch (err) {
-                console.warn('Wake Lock failed:', err.message);
-                updateWakeLockUI(false);
-            }
+            } catch (err) { updateWakeLockUI(false); }
         }
 
         document.addEventListener('visibilitychange', async () => {
-            if (wakeLock !== null && document.visibilityState === 'visible') {
-                await requestWakeLock();
-            }
+            if (wakeLock !== null && document.visibilityState === 'visible') await requestWakeLock();
         });
 
         function updateWakeLockUI(isActive) {
@@ -247,14 +223,7 @@
             const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 });
 
             document.getElementById('map').classList.add('mode-street');
-            
-            // 初始化地圖時，加入 zoomSnap: 0.1 允許細微縮放
-            map = L.map('map', { 
-                zoomControl: false, 
-                layers: [osmLayer], 
-                zoomSnap: 0.1 
-            }).setView([currentPos.lat, currentPos.lng], 15);
-            
+            map = L.map('map', { zoomControl: false, layers: [osmLayer], zoomSnap: 0.1 }).setView([currentPos.lat, currentPos.lng], 15);
             L.control.layers({ "深色 (Dark)": darkLayer, "淺色 (Light)": lightLayer, "街道 (Street)": osmLayer }, null, {position: 'topright'}).addTo(map);
 
             map.on('baselayerchange', function(e) {
@@ -272,9 +241,7 @@
             });
             userMarker = L.marker([currentPos.lat, currentPos.lng], {icon: carIcon, zIndexOffset: 1000}).addTo(map);
 
-            map.on('click', (e) => {
-                if(!watchId) startSimulation(e.latlng);
-            });
+            map.on('click', (e) => { if(!watchId) startSimulation(e.latlng); });
         }
 
         async function loadCameras() {
@@ -296,11 +263,31 @@
 
         function renderCameras() {
             cameras.forEach(cam => {
-                // 如果相機有方向資料，顯示黃色箭頭
                 let arrowHtml = '';
+                // 1. 繪製方向箭頭
                 if (typeof cam.direction !== 'undefined') {
-                    // 旋轉箭頭以匹配車流方向
                     arrowHtml = `<div class="camera-direction-arrow" style="transform: rotate(${cam.direction}deg);"></div>`;
+                    
+                    // 2. 新增：繪製扇形偵測區 (Cone Visualization)
+                    // 計算扇形的三個點：圓心(相機)、左邊界、右邊界
+                    const r = 0.003; // 半徑長度 (約300m，經緯度單位)
+                    const center = [cam.lat, cam.lng];
+                    
+                    // 扇形朝向相機的「反方向」(上游)
+                    const upstreamDir = (cam.direction + 180) % 360;
+                    const leftAngle = (upstreamDir - CONFIG.CONE_ANGLE) * (Math.PI / 180);
+                    const rightAngle = (upstreamDir + CONFIG.CONE_ANGLE) * (Math.PI / 180);
+                    
+                    const leftPoint = [cam.lat + r * Math.cos(leftAngle), cam.lng + r * Math.sin(leftAngle)];
+                    const rightPoint = [cam.lat + r * Math.cos(rightAngle), cam.lng + r * Math.sin(rightAngle)];
+                    
+                    L.polygon([center, leftPoint, rightPoint], {
+                        color: 'yellow',
+                        weight: 1,
+                        fillColor: 'yellow',
+                        fillOpacity: 0.15,
+                        dashArray: '5, 5' // 虛線，看起來比較專業
+                    }).addTo(map);
                 }
 
                 const icon = L.divIcon({
@@ -360,7 +347,6 @@
         }
 
         function checkProximity(lat, lng, speed = 0, heading = null) {
-            // 觸發路名查詢 (作為輔助資訊，非主要過濾)
             fetchRoadName(lat, lng);
 
             if (cameras.length === 0) return;
@@ -369,18 +355,15 @@
             let nearestCam = null;
 
             for (let cam of cameras) {
-                // --- Layer 1: 基礎距離過濾 (粗篩) ---
                 const d = getDistance(lat, lng, cam.lat, cam.lng);
+                
                 if (d > CONFIG.WARN_DIST) continue;
 
                 let isThreat = true;
 
-                // 只有當車輛有速度(確保 heading 準確) 且 相機有定義方向時，才進行進階過濾
                 if (speed > 5 && heading !== null && typeof cam.direction !== 'undefined') {
                     
-                    // --- Layer 2: 方向性過濾 (Vector Logic) ---
-                    // 檢查「車輛行進方向」是否與「相機車流方向」平行 (容許誤差內)
-                    // 解決對向車道與垂直道路問題
+                    // Layer 2: 方向性過濾
                     let headingDiff = Math.abs(heading - cam.direction);
                     if (headingDiff > 180) headingDiff = 360 - headingDiff;
                     
@@ -388,11 +371,7 @@
                         isThreat = false;
                     }
 
-                    // --- Layer 3: 扇形偵測區 (Cone of Detection) ---
-                    // 解決平行道路問題 (如信義路 vs 仁愛路)
-                    // 邏輯：車子必須位於相機的「上游」。
-                    // 計算：相機位置指向車輛位置的方位角 (Bearing Cam -> Car)
-                    // 上游方向應為：相機方向的反方向 (CamDir + 180)
+                    // Layer 3: 扇形偵測
                     if (isThreat) {
                         const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
                         const expectedUpstreamBearing = (cam.direction + 180) % 360;
@@ -400,7 +379,6 @@
                         let positionDiff = Math.abs(bearingCamToCar - expectedUpstreamBearing);
                         if (positionDiff > 180) positionDiff = 360 - positionDiff;
 
-                        // 如果車子不在上游扇形區內 (偏差太大)，代表可能在隔壁條路
                         if (positionDiff > CONFIG.CONE_ANGLE) {
                             isThreat = false;
                         }
@@ -442,8 +420,6 @@
                     currentPos = { lat: latitude, lng: longitude };
                     
                     userMarker.setLatLng([latitude, longitude]);
-                    
-                    // 調整為 16.4 的 Zoom Level，視野擴大約 1.5 倍
                     map.setView([latitude, longitude], 16.4); 
                     
                     const kmh = speed ? Math.round(speed * 3.6) : 0;
@@ -477,8 +453,6 @@
             const steps = 200;
             let step = 0;
             let mockSpeed = Math.floor(Math.random() * 40) + 40; 
-            
-            // 模擬：計算 A->B 的方向作為行進方向
             const simHeading = getBearing(start.lat, start.lng, targetLatLng.lat, targetLatLng.lng);
 
             simInterval = setInterval(() => {
