@@ -72,11 +72,12 @@
             width: 0; height: 0;
             border-left: 6px solid transparent;
             border-right: 6px solid transparent;
-            border-bottom: 10px solid yellow; /* 黃色箭頭 */
+            border-bottom: 14px solid #FACC15; /* 黃色箭頭，加大一點更明顯 */
             transform-origin: center bottom;
             margin-left: -6px;
-            margin-top: -16px; /* 調整位置到相機圖示上方 */
+            margin-top: -20px; /* 調整位置到相機圖示上方 */
             z-index: 10;
+            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.5));
         }
     </style>
 </head>
@@ -171,17 +172,18 @@
             { id: "mock4", address: "臺北市信義區莊敬路", limit: 50, lat: 25.028000, lng: 121.565000, direction: 180 }
         ];
 
-        // 參數設定 (第三層級：扇形偵測)
+        // 參數設定 (業界標準邏輯)
         const CONFIG = { 
             WARN_DIST: 600, 
             ALERT_DIST: 300, 
             RESET_DIST: 800,
             
-            // 1. 方向容許誤差 (CarHeading vs CamDirection)
+            // Layer 2: 方向平行容許誤差 (CarHeading vs CamDirection)
+            // 30度通常足夠過濾掉垂直與對向車道
             HEADING_TOLERANCE: 30, 
             
-            // 2. 扇形偵測區角度 (Cone of Detection)
-            // 車子必須在相機的「上游」+/- 此角度內
+            // Layer 3: 上游扇形偵測區角度 (Cone of Detection)
+            // 車子必須在相機的「上游」+/- 此角度內，才視為有效目標
             CONE_ANGLE: 45 
         };
         
@@ -297,6 +299,7 @@
                 // 如果相機有方向資料，顯示黃色箭頭
                 let arrowHtml = '';
                 if (typeof cam.direction !== 'undefined') {
+                    // 旋轉箭頭以匹配車流方向
                     arrowHtml = `<div class="camera-direction-arrow" style="transform: rotate(${cam.direction}deg);"></div>`;
                 }
 
@@ -357,7 +360,7 @@
         }
 
         function checkProximity(lat, lng, speed = 0, heading = null) {
-            // 嘗試取得路名 (輔助顯示用，不作為唯一過濾條件)
+            // 觸發路名查詢 (作為輔助資訊，非主要過濾)
             fetchRoadName(lat, lng);
 
             if (cameras.length === 0) return;
@@ -366,39 +369,38 @@
             let nearestCam = null;
 
             for (let cam of cameras) {
+                // --- Layer 1: 基礎距離過濾 (粗篩) ---
                 const d = getDistance(lat, lng, cam.lat, cam.lng);
-                
-                // 1. 第一層：基礎距離過濾
                 if (d > CONFIG.WARN_DIST) continue;
 
                 let isThreat = true;
 
-                // 如果我們有「方向資料」(GPS Heading + Camera Direction)
-                // 就可以進行 Layer 2 (方向) & Layer 3 (扇形偵測)
-                // 註：這需要車輛有速度(確保 heading 準確) 且 相機有定義方向
+                // 只有當車輛有速度(確保 heading 準確) 且 相機有定義方向時，才進行進階過濾
                 if (speed > 5 && heading !== null && typeof cam.direction !== 'undefined') {
                     
-                    // --- 第二層：方向性過濾 (Parallel Check) ---
-                    // 檢查車輛行進方向是否與相機車流方向「平行」(容許誤差內)
+                    // --- Layer 2: 方向性過濾 (Vector Logic) ---
+                    // 檢查「車輛行進方向」是否與「相機車流方向」平行 (容許誤差內)
+                    // 解決對向車道與垂直道路問題
                     let headingDiff = Math.abs(heading - cam.direction);
                     if (headingDiff > 180) headingDiff = 360 - headingDiff;
                     
                     if (headingDiff > CONFIG.HEADING_TOLERANCE) {
-                        isThreat = false; // 方向不同 (例如對向車道或垂直道路)
+                        isThreat = false;
                     }
 
-                    // --- 第三層：扇形偵測區 (Cone Check) ---
-                    // 檢查車輛是否位於相機的「上游」
-                    // 邏輯：計算 相機->車輛 的方位角。
-                    // 如果車流向東 (90度)，車子應該在相機的西方 (270度)
+                    // --- Layer 3: 扇形偵測區 (Cone of Detection) ---
+                    // 解決平行道路問題 (如信義路 vs 仁愛路)
+                    // 邏輯：車子必須位於相機的「上游」。
+                    // 計算：相機位置指向車輛位置的方位角 (Bearing Cam -> Car)
+                    // 上游方向應為：相機方向的反方向 (CamDir + 180)
                     if (isThreat) {
                         const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
-                        const expectedBearing = (cam.direction + 180) % 360; // 上游方向
+                        const expectedUpstreamBearing = (cam.direction + 180) % 360;
                         
-                        let positionDiff = Math.abs(bearingCamToCar - expectedBearing);
+                        let positionDiff = Math.abs(bearingCamToCar - expectedUpstreamBearing);
                         if (positionDiff > 180) positionDiff = 360 - positionDiff;
 
-                        // 如果車子不在上游扇形區內 (例如在平行道路的側面)，則忽略
+                        // 如果車子不在上游扇形區內 (偏差太大)，代表可能在隔壁條路
                         if (positionDiff > CONFIG.CONE_ANGLE) {
                             isThreat = false;
                         }
