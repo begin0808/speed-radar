@@ -53,15 +53,6 @@
             100% { opacity: 0.3; border-color: rgba(220, 38, 38, 0.4); }
         }
 
-        .camera-icon-img { transition: filter 0.3s; }
-        .camera-icon-img { filter: invert(100%); } /* 深色模式預設白 */
-        
-        .mode-street .camera-icon-img,
-        .mode-light .camera-icon-img {
-            /* 轉紅色 */
-            filter: invert(16%) sepia(99%) saturate(7404%) hue-rotate(4deg) brightness(95%) contrast(118%);
-        }
-
         .leaflet-control-layers { border: none !important; border-radius: 12px !important; box-shadow: 0 2px 10px rgba(0,0,0,0.3) !important; padding: 8px !important; }
         .leaflet-control-layers-toggle { width: 44px !important; height: 44px !important; }
         
@@ -217,14 +208,8 @@
             map = L.map('map', { zoomControl: false, layers: [osmLayer] }).setView([currentPos.lat, currentPos.lng], 15);
             L.control.layers({ "深色 (Dark)": darkLayer, "淺色 (Light)": lightLayer, "街道 (Street)": osmLayer }, null, {position: 'topright'}).addTo(map);
 
-            map.on('baselayerchange', function(e) {
-                const mapDiv = document.getElementById('map');
-                mapDiv.classList.remove('mode-dark', 'mode-light', 'mode-street');
-                if (e.name.includes("深色")) mapDiv.classList.add('mode-dark');
-                else if (e.name.includes("淺色")) mapDiv.classList.add('mode-light');
-                else mapDiv.classList.add('mode-street');
-            });
-
+            // 移除舊的圖層切換事件監聽器，因為現在圖示是固定的紅底白字，不需要隨圖層變色
+            
             const carIcon = L.divIcon({
                 className: 'custom-car',
                 html: `<div style="background:#3B82F6; width:24px; height:24px; border-radius:50%; border:3px solid white; box-shadow:0 0 15px #3B82F6;"></div>`,
@@ -255,11 +240,20 @@
         }
 
         function renderCameras() {
-             const icon = L.icon({
-                iconUrl: 'https://cdn-icons-png.flaticon.com/512/3256/3256054.png',
-                iconSize: [32, 32], iconAnchor: [16, 16], popupAnchor: [0, -10],
-                className: 'camera-icon-img'
+             // 使用 L.divIcon 繪製紅底白圖示 (內嵌 SVG)
+             const icon = L.divIcon({
+                className: 'custom-camera-icon', // 自定義 class，避免 Leaflet 預設樣式
+                html: `<div class="w-8 h-8 bg-red-600 rounded-full flex items-center justify-center shadow-lg border-2 border-white">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5 text-white">
+                          <path d="M12 9a3.75 3.75 0 100 7.5A3.75 3.75 0 0012 9z" />
+                          <path fill-rule="evenodd" d="M9.344 3.071a49.52 49.52 0 015.312 0c.967.052 1.83.585 2.332 1.39l.821 1.317c.24.383.645.643 1.11.71.386.054.77.113 1.152.177 1.432.239 2.429 1.493 2.429 2.909V18a3 3 0 01-3 3h-15a3 3 0 01-3-3V9.574c0-1.416.997-2.67 2.429-2.909.382-.064.766-.123 1.151-.178a1.56 1.56 0 001.11-.71l.822-1.315a2.942 2.942 0 012.332-1.39zM6.75 12.75a5.25 5.25 0 1110.5 0 5.25 5.25 0 01-10.5 0zm12-1.5a.75.75 0 100-1.5.75.75 0 000 1.5z" clip-rule="evenodd" />
+                        </svg>
+                       </div>`,
+                iconSize: [32, 32],
+                iconAnchor: [16, 16],
+                popupAnchor: [0, -10]
             });
+
             cameras.forEach(cam => {
                 // 修正彈出視窗內容
                 const addressText = cam.address ? cam.address : "地址未知";
