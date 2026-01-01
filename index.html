@@ -190,8 +190,8 @@
             WARN_DIST: 600, 
             ALERT_DIST: 300, 
             RESET_DIST: 800,
-            HEADING_TOLERANCE: 60, // 放寬至 60 度 (原 30)
-            CONE_ANGLE: 60         // 放寬至 60 度 (原 45)
+            HEADING_TOLERANCE: 60, 
+            CONE_ANGLE: 60         
         };
         
         let map, userMarker, pathLine;
@@ -426,9 +426,20 @@
                 } 
                 else {
                     if (currentRoadName && currentRoadName !== "未知道路" && cam.address) {
-                        const userRoadBase = currentRoadName.replace(/(段|巷|弄|號).*/, '');
-                        const camRoadBase = cam.address.replace(/(段|巷|弄|號).*/, '');
-                        if (userRoadBase.length > 1 && !cam.address.includes(userRoadBase) && !currentRoadName.includes(camRoadBase)) {
+                        // 修正後的路名處理邏輯
+                        let userRoadBase = currentRoadName;
+                        
+                        // 1. 移除 "段" (前面必須是數字或中文數字)
+                        userRoadBase = userRoadBase.replace(/(\d+|[一二三四五六七八九十]+)段.*/, '');
+                        
+                        // 2. 移除 "巷", "弄", "號"
+                        userRoadBase = userRoadBase.replace(/(巷|弄|號).*/, '').trim();
+                        
+                        // 3. 處理相機地址：移除分隔符
+                        const camAddressClean = cam.address.replace(/[-_/\s]/g, '');
+
+                        // 只有當核心路名長度 > 1 且相機地址完全不包含它時，才判定為不符
+                        if (userRoadBase.length > 1 && !camAddressClean.includes(userRoadBase)) {
                             isThreat = false;
                             failReason = "路名不符";
                         }
