@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3069/3069172.png">
     
-    <title>小企鵝超速雷達 (Offset View)</title>
+    <title>小企鵝超速雷達 (High Offset)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -58,6 +58,24 @@
             cursor: pointer;
         }
         .btn-control:active { transform: scale(0.95); }
+
+        /* 圓形定位按鈕樣式 */
+        .btn-location {
+            pointer-events: auto;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #2563EB; /* 鮮豔藍 */
+            color: white;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+            border: 2px solid rgba(255,255,255,0.8);
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .btn-location:active { transform: scale(0.9); background-color: #1D4ED8; }
         
         @keyframes pulse {
             0% { opacity: 0.3; border-color: rgba(220, 38, 38, 0.4); }
@@ -105,11 +123,11 @@
 
     <!-- 右側：功能按鈕 -->
     <div id="right-controls">
-        <button onclick="startGPS()" class="btn-control bg-green-600 text-white! hover:bg-green-700 shadow-lg">
-            🛰️ 重啟 GPS
-        </button>
-        <button onclick="toggleSimulation()" class="btn-control bg-blue-600 text-white! hover:bg-blue-700 shadow-lg">
-            🚗 模擬行駛
+        <!-- 重啟 GPS 按鈕 (圓形圖示) -->
+        <button onclick="startGPS()" class="btn-location" title="回到目前位置">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-7 h-7">
+                <path fill-rule="evenodd" d="M11.54 22.351l.07.04.028.016a.76.76 0 00.723 0l.028-.015.071-.041a16.975 16.975 0 001.144-.742 19.58 19.58 0 002.683-2.282c1.944-1.99 3.963-4.98 3.963-8.827a8.25 8.25 0 00-16.5 0c0 3.846 2.02 6.837 3.963 8.827a19.58 19.58 0 002.682 2.282 16.975 16.975 0 001.145.742zM12 13.5a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" />
+            </svg>
         </button>
     </div>
 
@@ -196,7 +214,7 @@
             RESET_DIST: 600, // 重置狀態
             HEADING_TOLERANCE: 45, 
             CONE_ANGLE: 30,
-            OFFSET_PIXELS: 150 // 地圖中心偏移量 (像素)，用於避開儀表板
+            OFFSET_PIXELS: 300 // 增加偏移量，讓車子更靠上 (原為 150)
         };
         
         let map, userMarker, pathLine;
@@ -488,6 +506,7 @@
                 const hasHeadingData = speed > 5 && heading !== null;
 
                 if (hasDirectionData && hasHeadingData) {
+                    // Layer 2: 方向性過濾
                     let headingDiff = Math.abs(heading - cam.direction);
                     if (headingDiff > 180) headingDiff = 360 - headingDiff;
                     if (headingDiff > CONFIG.HEADING_TOLERANCE) {
@@ -495,6 +514,7 @@
                         failReason = `角度偏 ${Math.round(headingDiff)}°`;
                     }
 
+                    // Layer 3: 扇形偵測
                     if (isThreat) {
                         const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
                         const expectedUpstreamBearing = (cam.direction + 180) % 360;
