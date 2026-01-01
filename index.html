@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3069/3069172.png">
     
-    <title>小企鵝超速雷達 (Voice Select)</title>
+    <title>小企鵝超速雷達 (Simple Voice)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -33,7 +33,7 @@
             border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px);
         }
         
-        /* 修改：讓左上角控制項可以垂直排列 */
+        /* 左上角控制項容器 */
         #top-left-controls {
             position: fixed; top: 15px; left: 15px;
             z-index: 1000; pointer-events: none;
@@ -144,10 +144,6 @@
         <!-- 語音開關 -->
         <button onclick="toggleAudio()" id="btn-audio" class="btn-control">
             🔊 語音開啟
-        </button>
-        <!-- 切換人聲按鈕 (預設隱藏，有偵測到多種語音才顯示) -->
-        <button onclick="switchVoice()" id="btn-voice" class="btn-control hidden">
-            🗣️ 切換人聲
         </button>
     </div>
 
@@ -260,10 +256,6 @@
         let lastRoadFetchTime = 0;
         let lastRoadFetchPos = null;
 
-        // 語音相關變數
-        let availableVoices = [];
-        let currentVoiceIndex = 0;
-
         // --- 音效管理 (Beep Manager) ---
         const BeepManager = {
             audioCtx: null,
@@ -314,46 +306,6 @@
             loadCameras();
             // 注意：這裡不再自動呼叫 startGPS() 或 requestWakeLock()
             // 而是等待使用者點擊「開始使用」按鈕
-            
-            // 預先載入語音清單
-            loadVoices();
-            if (speechSynthesis.onvoiceschanged !== undefined) {
-                speechSynthesis.onvoiceschanged = loadVoices;
-            }
-        }
-
-        // 載入並篩選中文語音
-        function loadVoices() {
-            const allVoices = window.speechSynthesis.getVoices();
-            // 優先找台灣中文，其次找所有中文
-            availableVoices = allVoices.filter(voice => voice.lang.includes('zh'));
-            
-            // 將 zh-TW 排在最前面
-            availableVoices.sort((a, b) => {
-                if (a.lang === 'zh-TW') return -1;
-                if (b.lang === 'zh-TW') return 1;
-                return 0;
-            });
-
-            if (availableVoices.length > 1) {
-                document.getElementById('btn-voice').classList.remove('hidden');
-            }
-            console.log("可用中文語音:", availableVoices.map(v => v.name));
-        }
-
-        // 切換語音並測試
-        function switchVoice() {
-            if (availableVoices.length === 0) return;
-            currentVoiceIndex = (currentVoiceIndex + 1) % availableVoices.length;
-            const voiceName = availableVoices[currentVoiceIndex].name;
-            console.log("切換至語音:", voiceName);
-            
-            // 顯示提示
-            const btn = document.getElementById('btn-voice');
-            btn.innerText = `🗣️ ${voiceName.substring(0, 5)}...`; // 簡略顯示名稱
-            setTimeout(() => btn.innerText = "🗣️ 切換人聲", 2000);
-
-            speak("測試語音：一二三");
         }
 
         // 新增：App 啟動流程 (使用者點擊按鈕後觸發)
@@ -688,7 +640,7 @@
                     
                     userMarker.setLatLng([latitude, longitude]);
                     
-                    // 修正：Zoom Level 為 15.3 (視野更廣)
+                    // 修正：使用 offset center
                     const center = getOffsetCenter(latitude, longitude, 15.3);
                     map.setView(center, 15.3); 
                     
@@ -871,16 +823,8 @@
         function speak(text) { 
             window.speechSynthesis.cancel(); 
             const u = new SpeechSynthesisUtterance(text); 
-            
-            // 使用選擇的語音
-            if (availableVoices.length > 0) {
-                u.voice = availableVoices[currentVoiceIndex];
-            }
-
-            // 調整語速與語調
             u.lang = 'zh-TW'; 
             u.rate = 1.2; 
-            
             window.speechSynthesis.speak(u); 
         }
 
