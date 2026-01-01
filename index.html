@@ -8,9 +8,10 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3069/3069172.png">
+    <!-- 更新 iOS 圖示為本地檔案 -->
+    <link rel="apple-touch-icon" href="penguin.png">
     
-    <title>小企鵝超速雷達 (Smart Alert)</title>
+    <title>小企鵝超速雷達</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -223,12 +224,12 @@
             { id: "mock3", address: "國道1號南向", limit: 100, lat: 25.060000, lng: 121.500000, direction: 180, direct: "南向" }
         ];
 
-        // 參數設定
         const CONFIG = { 
-            WARN_DIST: 500,  // 黃色警示距離
-            ALERT_DIST: 200, // 紅色警示距離
-            RESET_DIST: 600, // 離開距離
-            MIN_SPEED_ALERT: 20, // 最小警示時速 (低於此速度不警示)
+            WARN_DIST: 500,  
+            ALERT_DIST: 200, 
+            PASS_DIST: 100,  
+            RESET_DIST: 600, 
+            MIN_SPEED_ALERT: 20, 
             HEADING_TOLERANCE: 45, 
             CONE_ANGLE: 30,
             OFFSET_PIXELS: 200 
@@ -239,19 +240,62 @@
         let currentPos = { lat: 25.033964, lng: 121.564468 }; 
         let watchId = null;
         let audioEnabled = true; 
-        // 互動狀態：記錄目前正在對哪支相機進行警示
-        let interactionState = { 
-            id: null,        // 鎖定的相機 ID
-            warned500: false, 
-            warned200: false, 
-            flashEndTime: 0  // 閃爍結束時間戳記
-        };
+        let speechState = { hasWarned500: false, hasWarned200: false, currentCameraId: null };
         let isSimulating = false;
         let simInterval;
         let wakeLock = null;
         let currentRoadName = null;
         let lastRoadFetchTime = 0;
         let lastRoadFetchPos = null;
+        let interactionState = { 
+            id: null,        
+            warned500: false, 
+            warned200: false, 
+            flashEndTime: 0  
+        };
+
+        const BeepManager = {
+            audioCtx: null,
+            interval: null,
+            init: function() {
+                if (!this.audioCtx) {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (this.audioCtx.state === 'suspended') {
+                    this.audioCtx.resume().catch(() => {});
+                }
+            },
+            playTone: function() {
+                if (!this.audioCtx) return;
+                const osc = this.audioCtx.createOscillator();
+                const gain = this.audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(this.audioCtx.destination);
+                
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(880, this.audioCtx.currentTime); 
+                osc.frequency.exponentialRampToValueAtTime(440, this.audioCtx.currentTime + 0.1);
+                
+                gain.gain.setValueAtTime(0.1, this.audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.1);
+                
+                osc.start();
+                osc.stop(this.audioCtx.currentTime + 0.1);
+            },
+            start: function() {
+                this.init();
+                if (!this.interval) {
+                    this.playTone(); 
+                    this.interval = setInterval(() => this.playTone(), 600); 
+                }
+            },
+            stop: function() {
+                if (this.interval) {
+                    clearInterval(this.interval);
+                    this.interval = null;
+                }
+            }
+        };
 
         function init() {
             initMap();
@@ -266,6 +310,8 @@
 
             startGPS();
             requestWakeLock();
+            
+            BeepManager.init();
             speak("歡迎使用小企鵝測速警示系統");
         }
 
@@ -673,80 +719,72 @@
             document.getElementById('speed-display').innerText = speed;
             const elDist = document.getElementById('distance-display');
             const elMsgBox = document.getElementById('alert-message-box');
-            const alertOverlay = document.getElementById('alert-overlay');
             
+            // Clear alerts if far away or no camera
             if (dist > 2000 || !cam) {
                 elDist.innerText = "--"; 
-                alertOverlay.style.display = 'none'; 
+                document.getElementById('alert-overlay').style.display = 'none'; 
                 elMsgBox.classList.add('hidden');
+                BeepManager.stop(); // Stop sound
                 return;
             }
             
             elDist.innerText = Math.round(dist);
             document.getElementById('limit-val').innerText = cam.limit;
             
-            // --- Stage 2: 紅色警戒 (200m 內) ---
-            if (dist <= CONFIG.ALERT_DIST) {
-                // 如果速度過低，不顯示警示 (靜音模式)
-                if (speed < CONFIG.MIN_SPEED_ALERT) {
-                    alertOverlay.style.display = 'none';
-                    elMsgBox.classList.add('hidden');
-                    return;
-                }
-
-                // 速度夠快，顯示紅色警示
+            // --- UI 狀態依據距離切換 ---
+            if (dist <= CONFIG.PASS_DIST) {
+                // Stage 3: 通過 (<100m) - 紅色 + 音效
+                document.getElementById('alert-overlay').style.display = 'block';
                 elMsgBox.classList.remove('hidden');
                 elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
-                
-                // 處理閃爍邏輯 (5秒自動停止)
-                // 檢查是否是新的相機互動，如果是，重置閃爍計時器
-                if (interactionState.id !== cam.id) {
-                    interactionState.id = cam.id;
-                    interactionState.flashEndTime = Date.now() + 5000; // 5秒後停止
-                }
-
-                if (Date.now() < interactionState.flashEndTime) {
-                    alertOverlay.style.display = 'block';
-                } else {
-                    alertOverlay.style.display = 'none'; // 時間到，停止閃爍
-                }
-
+            } else if (dist <= CONFIG.ALERT_DIST) {
+                // Stage 2: 緊急 (<200m) - 紅色 + 靜音
+                document.getElementById('alert-overlay').style.display = 'block';
+                elMsgBox.classList.remove('hidden');
+                elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
             } else if (dist <= CONFIG.WARN_DIST) {
-                // --- Stage 1: 黃色預警 (500m - 200m) ---
-                alertOverlay.style.display = 'none';
+                // Stage 1: 預警 (<500m) - 黃色
+                document.getElementById('alert-overlay').style.display = 'none';
                 elMsgBox.classList.remove('hidden');
                 elMsgBox.innerHTML = `<span class="text-lg font-bold text-yellow-300">🔔 前方測速</span>`;
-                
-                // 重置互動 ID，以便下次進入紅區時能重新觸發閃爍
-                // 但要小心不要在黃區反覆重置，導致紅區閃爍失效
-                // 這裡我們不重置，讓 interactionState.id 保持為 null 直到進入紅區
-                // 或者如果離開太遠 (RESET_DIST) 才重置
             } else {
-                alertOverlay.style.display = 'none'; 
+                document.getElementById('alert-overlay').style.display = 'none'; 
                 elMsgBox.classList.add('hidden');
+            }
+            
+            // 音效控制：離開 100m 後停止音效
+            if (dist > CONFIG.PASS_DIST) {
+                BeepManager.stop();
             }
         }
 
         function handleVoiceAlert(dist, cam, speed) {
             if (!audioEnabled || !cam) return;
             
-            // 重置狀態 (離開夠遠)
+            // 重置狀態
             if (speechState.currentCameraId !== cam.id || dist > CONFIG.RESET_DIST) {
                 speechState = { hasWarned500: false, hasWarned200: false, currentCameraId: cam.id };
+                BeepManager.stop();
             }
 
-            // Stage 1: 500m 預警 (只要距離到就報)
+            // Stage 1: 500m 預警
             if (dist <= CONFIG.WARN_DIST && dist > CONFIG.ALERT_DIST && !speechState.hasWarned500) {
                 speak(`前方測速，限速${cam.limit}`);
                 speechState.hasWarned500 = true;
             }
             
-            // Stage 2: 200m 緊急 (需同時滿足速度條件)
-            if (dist <= CONFIG.ALERT_DIST && !speechState.hasWarned200) {
+            // Stage 2: 200m 緊急
+            if (dist <= CONFIG.ALERT_DIST && dist > CONFIG.PASS_DIST && !speechState.hasWarned200) {
                 if (speed >= CONFIG.MIN_SPEED_ALERT) {
                     speak(`注意，限速${cam.limit}`);
                     speechState.hasWarned200 = true;
                 }
+            }
+            
+            // Stage 3: 100m 通過 (音效)
+            if (dist <= CONFIG.PASS_DIST) {
+                BeepManager.start(); // 啟動連續音效
             }
         }
         
@@ -756,9 +794,10 @@
             if (audioEnabled) {
                 btn.innerText = "🔊 語音開啟";
                 speak("語音已開啟");
+                BeepManager.init();
             } else {
                 btn.innerText = "🔇 語音關閉";
-                window.speechSynthesis.cancel();
+                BeepManager.stop();
             }
         }
         
@@ -770,6 +809,13 @@
             window.speechSynthesis.speak(u); 
         }
 
+        function enableAudio() { 
+            audioEnabled = true; 
+            document.getElementById('btn-audio').innerText = "🔊 語音開啟"; 
+            speak("語音啟動"); 
+            BeepManager.init(); // 初始化音效引擎
+        }
+        
         init();
     </script>
 </body>

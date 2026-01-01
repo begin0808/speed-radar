@@ -1,0 +1,21 @@
+{
+  "name": "小企鵝超速雷達",
+  "short_name": "小企鵝雷達",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#1a1a1a",
+  "theme_color": "#1a1a1a",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "./penguin.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "./penguin.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
