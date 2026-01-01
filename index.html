@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3069/3069172.png">
     
-    <title>小企鵝超速雷達 (Hybrid Logic)</title>
+    <title>小企鵝超速雷達 (Strict Direction)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -140,7 +140,7 @@
             <div class="text-lg font-bold text-blue-300 truncate mt-1" id="current-road-display">
                 偵測中...
             </div>
-            <!-- 新增：偵測除錯資訊 -->
+            <!-- 偵測除錯資訊：顯示判定結果 -->
             <div class="text-[10px] text-yellow-500 mt-1 truncate" id="detection-debug-info">
                 等待移動...
             </div>
@@ -180,18 +180,26 @@
 
         const DATA_URL = './cameras.json'; 
 
+        // 模擬資料：加入方向 (0-360)
+        // 注意：方向是指「車流方向」。
+        // 例如：信義路是東西向，如果相機拍「往東」的車，direction 應為 90。
         const MOCK_DATA = [
             { id: "mock1", address: "臺北市信義區信義路五段", limit: 50, lat: 25.032969, lng: 121.560000, direction: 90 },
             { id: "mock2", address: "臺北市信義區松高路", limit: 60, lat: 25.035000, lng: 121.568000, direction: 270 },
             { id: "mock3", address: "國道1號南向", limit: 100, lat: 25.060000, lng: 121.500000, direction: 180 }
         ];
 
-        // 放寬參數設定，提升偵測成功率
+        // 參數設定 (嚴格模式)
         const CONFIG = { 
             WARN_DIST: 600, 
             ALERT_DIST: 300, 
             RESET_DIST: 800,
-            HEADING_TOLERANCE: 60, 
+            
+            // Layer 2: 方向容許誤差 (CarHeading vs CamDirection)
+            // 縮小至 45 度，排除垂直與大角度對向
+            HEADING_TOLERANCE: 45, 
+            
+            // Layer 3: 上游扇形偵測區角度
             CONE_ANGLE: 60         
         };
         
@@ -299,6 +307,7 @@
             cameras.forEach(cam => {
                 let arrowHtml = '';
                 if (typeof cam.direction !== 'undefined') {
+                    // 黃色箭頭指向車流方向
                     arrowHtml = `<div class="camera-direction-arrow" style="transform: rotate(${cam.direction}deg);"></div>`;
                     
                     const r = 0.003; 
@@ -365,8 +374,6 @@
                 const data = await response.json();
                 
                 if (data && data.address) {
-                    // OSM 可能回傳 road, pedestrian, highway 等欄位
-                    // 特別注意：highway 欄位可能包含 "國道一號" (中文數字)
                     const road = data.address.road || data.address.pedestrian || data.address.highway || data.address.street || "未知道路";
                     currentRoadName = road;
                     const roadDisplay = document.getElementById('current-road-display');
@@ -377,28 +384,17 @@
             } catch (e) { }
         }
 
-        // --- 路名正規化函式 ---
-        // 將 "國道一號", "台七十四線" 轉換為 "國道1號", "台74線" 以便比對
         function normalizeRoadName(name) {
             if (!name) return "";
             let normalized = name;
-            
-            // 處理中文數字一到九 (簡單對應)
-            const cnNums = {'一':'1', '二':'2', '三':'3', '四':'4', '五':'5', '六':'6', '七':'7', '八':'8', '九':'9', '十':'10'};
-            
-            // 特殊處理國道：國道一號 -> 國道1號
             if (normalized.startsWith("國道")) {
                 normalized = normalized.replace(/[一二三四五六七八九十]+/g, (match) => {
-                    // 這裡做個簡單轉換，若有複雜數字(如六十八)可能需要更強的 parser，但目前國道號碼多為個位或雙位
-                    // 暫時只處理個位數轉換，或者直接 mapping 常見國道
                     if (match === '一') return '1';
                     if (match === '三') return '3';
                     if (match === '五') return '5';
-                    // ... 可視需要擴充，或使用更通用的轉換
                     return match; 
                 });
             }
-            
             return normalized;
         }
 
@@ -431,13 +427,18 @@
                 const hasHeadingData = speed > 5 && heading !== null;
 
                 if (hasDirectionData && hasHeadingData) {
+                    // Layer 2: 方向性過濾
+                    // 計算車輛方向與相機車流方向的差異
                     let headingDiff = Math.abs(heading - cam.direction);
                     if (headingDiff > 180) headingDiff = 360 - headingDiff;
+                    
+                    // 如果差異大於容許值 (45度)，視為方向不符 (如對向、垂直)
                     if (headingDiff > CONFIG.HEADING_TOLERANCE) {
                         isThreat = false;
-                        failReason = `角度偏 ${Math.round(headingDiff)}°`;
+                        failReason = `方向不符 (偏${Math.round(headingDiff)}°)`;
                     }
 
+                    // Layer 3: 扇形偵測
                     if (isThreat) {
                         const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
                         const expectedUpstreamBearing = (cam.direction + 180) % 360;
@@ -450,23 +451,21 @@
                     }
                 } 
                 else {
+                    // 資料無方向資訊：降級使用路名比對
                     if (currentRoadName && currentRoadName !== "未知道路" && cam.address) {
-                        // 1. 正規化路名 (處理國道數字問題)
                         const normUserRoad = normalizeRoadName(currentRoadName);
-                        
-                        // 2. 處理一般道路：移除 (數字+段) 或 (中文字+段) 或 巷弄號
-                        // 對於 "國道1號"，這行 replace 不會影響太多，因為它沒有 "段"
                         let userRoadBase = normUserRoad.replace(/(\d+|[一二三四五六七八九十]+)段.*/, '');
                         userRoadBase = userRoadBase.replace(/(巷|弄|號).*/, '').trim();
-                        
-                        // 3. 處理相機地址
                         const camAddressClean = cam.address.replace(/[-_/\s]/g, '');
 
-                        // 判斷
                         if (userRoadBase.length > 1 && !camAddressClean.includes(userRoadBase)) {
                             isThreat = false;
                             failReason = "路名不符";
                         }
+                    } else {
+                        // 如果也沒有路名資訊，則預設無法過濾 (保持 isThreat = true)
+                        // 但標記原因以便除錯
+                        if (!hasDirectionData) failReason = "資料無方向 (路名未知)";
                     }
                 }
 
@@ -487,7 +486,8 @@
                 debugEl.innerText = `鎖定: ${nearestCam.limit}k (${Math.round(minDist)}m)`;
                 debugEl.className = "text-[10px] text-green-400 mt-1 truncate";
             } else if (absNearest && absMinDist < 800) {
-                debugEl.innerText = `最近 ${Math.round(absMinDist)}m (${absNearest.address}) - ${debugMsg}`;
+                // 如果附近有相機但被忽略，顯示原因
+                debugEl.innerText = `最近 ${Math.round(absMinDist)}m - ${debugMsg}`;
                 debugEl.className = "text-[10px] text-gray-400 mt-1 truncate";
             } else {
                 debugEl.innerText = "範圍內無測速";
