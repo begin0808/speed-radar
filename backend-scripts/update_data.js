@@ -1,29 +1,39 @@
-const admin = require('firebase-admin');
-const axios = require('axios');
-const csv = require('csv-parser');
-const proj4 = require('proj4');
-const iconv = require('iconv-lite');
-const fs = require('fs');
-const path = require('path');
+import admin from 'firebase-admin';
+import axios from 'axios';
+import csv from 'csv-parser';
+import proj4 from 'proj4';
+import iconv from 'iconv-lite';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-// 設定金鑰路徑
+// --- 環境設定 (ES Module 相容) ---
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// 設定檔案路徑
 const keyPath = path.join(__dirname, 'serviceAccountKey.json');
+// ★ 設定本地 CSV 檔案路徑 (請確認您的檔案名稱是否為 NPA_TD1 (2).csv 或其他名稱)
+// 建議您可以將下載的檔案改名為 local_data.csv 並放在此腳本同層目錄
+const localCsvPath = path.join(__dirname, 'NPA_TD1 (2).csv'); 
+const localCsvPathAlt = path.join(__dirname, 'local_data.csv'); 
+
 let db = null;
 
 // 1. 嘗試初始化 Firebase (如果在本地端有金鑰才執行)
 if (fs.existsSync(keyPath)) {
     try {
-        const serviceAccount = require(keyPath);
+        // ES Module 讀取 JSON 的方式
+        const serviceAccount = JSON.parse(fs.readFileSync(keyPath, 'utf8'));
         admin.initializeApp({
             credential: admin.credential.cert(serviceAccount)
         });
         db = admin.firestore();
         console.log("✅ 偵測到金鑰，已連線 Firebase (支援資料庫寫入)");
     } catch (e) {
-        console.warn("⚠️ 金鑰讀取失敗，跳過 Firebase 連線");
+        console.warn("⚠️ 金鑰讀取失敗，跳過 Firebase 連線", e.message);
     }
 } else {
-    // 在 GitHub Actions 上執行時，通常沒有金鑰，這是正常的
     console.log("ℹ️ 未偵測到 serviceAccountKey.json，將僅執行靜態 JSON 產出 (GitHub Mode)");
 }
 
@@ -70,19 +80,34 @@ async function main() {
   console.log('🚀 [Step 1] 開始執行資料更新任務...');
 
   try {
-    const response = await axios({
-      method: 'get',
-      url: CSV_URL,
-      responseType: 'stream',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      }
-    });
+    let stream;
+    
+    // 優先檢查本地是否有 CSV 檔案 (處理您上傳的檔案)
+    if (fs.existsSync(localCsvPath)) {
+        console.log(`📂 發現本地資料檔: ${localCsvPath}，將優先使用。`);
+        // 本地檔案通常不需要 iconv 解碼 (除非是 Big5)，這裡假設是 UTF-8 或系統預設
+        // 如果讀出來是亂碼，請嘗試加入 .pipe(iconv.decodeStream('big5'))
+        stream = fs.createReadStream(localCsvPath).pipe(csv());
+    } else if (fs.existsSync(localCsvPathAlt)) {
+        console.log(`📂 發現本地資料檔: ${localCsvPathAlt}，將優先使用。`);
+        stream = fs.createReadStream(localCsvPathAlt).pipe(csv());
+    } else {
+        // 如果沒有本地檔案，才去網路下載
+        console.log(`🌐 本地無資料，正在從政府開放平台下載...`);
+        const response = await axios({
+            method: 'get',
+            url: CSV_URL,
+            responseType: 'stream',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+        });
+        // 網路串流通常需要解碼
+        stream = response.data.pipe(iconv.decodeStream('utf-8')).pipe(csv());
+    }
 
     const cameras = [];
-    console.log('📥 [Step 2] 正在下載並解析 CSV...');
-
-    const stream = response.data.pipe(iconv.decodeStream('utf-8')).pipe(csv());
+    console.log('📥 [Step 2] 正在解析 CSV...');
 
     for await (const row of stream) {
       const rawDirect = row['direct'] || row['拍攝方向'] || row['Direct'] || '';
@@ -126,19 +151,18 @@ async function main() {
     console.log(`✅ 解析完成，共取得 ${cameras.length} 筆有效資料`);
 
     if (cameras.length > 0) {
+        // 輸出到專案根目錄
         const outputPath = path.join(__dirname, '../cameras.json');
         console.log(`💾 [Step 3] 正在產生靜態檔案: ${outputPath}`);
         fs.writeFileSync(outputPath, JSON.stringify(cameras, null, 2));
         console.log('✅ cameras.json 產生成功！');
 
-        // 如果 db 存在 (即有金鑰)，才執行資料庫上傳 (本地開發用)
         if (db) {
-             // await uploadToFirestore(cameras); // 暫時註解掉，因為 V1.0 主要是靜態 JSON
+             // await uploadToFirestore(cameras); 
              // console.log('ℹ️ Firestore 上傳功能已暫停 (僅更新 JSON)');
         }
     } else {
         console.warn('⚠️ 警告：沒有解析到任何資料');
-        // 如果沒抓到資料，拋出錯誤讓 GitHub Actions 知道失敗了
         process.exit(1);
     }
 
