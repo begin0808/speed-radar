@@ -116,8 +116,9 @@
     <div id="alert-overlay"></div>
 
     <div id="top-left-controls">
-        <button onclick="enableAudio()" id="btn-audio" class="btn-control">
-            🔇 開啟語音
+        <!-- 預設文字改為「語音開啟」 -->
+        <button onclick="toggleAudio()" id="btn-audio" class="btn-control">
+            🔊 語音開啟
         </button>
     </div>
 
@@ -221,7 +222,7 @@
         let cameras = [];
         let currentPos = { lat: 25.033964, lng: 121.564468 }; 
         let watchId = null;
-        let audioEnabled = false;
+        let audioEnabled = true; // 預設開啟語音
         let speechState = { hasWarned500: false, hasWarned200: false, currentCameraId: null };
         let isSimulating = false;
         let simInterval;
@@ -239,7 +240,9 @@
                     this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 }
                 if (this.audioCtx.state === 'suspended') {
-                    this.audioCtx.resume();
+                    // 瀏覽器可能會阻擋自動播放，需要使用者互動才能 resume
+                    // 這裡嘗試 resume，但如果不成功，會在 toggleAudio 時再次嘗試
+                    this.audioCtx.resume().catch(() => {});
                 }
             },
             playTone: function() {
@@ -280,6 +283,12 @@
             loadCameras();
             startGPS();
             requestWakeLock();
+            
+            // 初始化音效引擎
+            BeepManager.init();
+            
+            // 播放歡迎語音 (瀏覽器可能會阻擋自動播放，需有互動)
+            speak("歡迎使用小企鵝測速警示系統");
         }
 
         async function requestWakeLock() {
@@ -760,6 +769,19 @@
             // Stage 3: 100m 通過 (音效)
             if (dist <= CONFIG.PASS_DIST) {
                 BeepManager.start(); // 啟動連續音效
+            }
+        }
+        
+        function toggleAudio() { 
+            audioEnabled = !audioEnabled;
+            const btn = document.getElementById('btn-audio');
+            if (audioEnabled) {
+                btn.innerText = "🔊 語音開啟";
+                speak("語音已開啟");
+                BeepManager.init();
+            } else {
+                btn.innerText = "🔇 語音關閉";
+                BeepManager.stop();
             }
         }
         
