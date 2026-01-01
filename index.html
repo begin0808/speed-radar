@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3069/3069172.png">
     
-    <title>小企鵝超速雷達 (Debug Ver.)</title>
+    <title>小企鵝超速雷達 (Hybrid Logic)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -182,7 +182,8 @@
 
         const MOCK_DATA = [
             { id: "mock1", address: "臺北市信義區信義路五段", limit: 50, lat: 25.032969, lng: 121.560000, direction: 90 },
-            { id: "mock2", address: "臺北市信義區松高路", limit: 60, lat: 25.035000, lng: 121.568000, direction: 270 }
+            { id: "mock2", address: "臺北市信義區松高路", limit: 60, lat: 25.035000, lng: 121.568000, direction: 270 },
+            { id: "mock3", address: "國道1號南向", limit: 100, lat: 25.060000, lng: 121.500000, direction: 180 }
         ];
 
         // 放寬參數設定，提升偵測成功率
@@ -364,7 +365,9 @@
                 const data = await response.json();
                 
                 if (data && data.address) {
-                    const road = data.address.road || data.address.pedestrian || data.address.street || "未知道路";
+                    // OSM 可能回傳 road, pedestrian, highway 等欄位
+                    // 特別注意：highway 欄位可能包含 "國道一號" (中文數字)
+                    const road = data.address.road || data.address.pedestrian || data.address.highway || data.address.street || "未知道路";
                     currentRoadName = road;
                     const roadDisplay = document.getElementById('current-road-display');
                     roadDisplay.innerText = road;
@@ -374,6 +377,31 @@
             } catch (e) { }
         }
 
+        // --- 路名正規化函式 ---
+        // 將 "國道一號", "台七十四線" 轉換為 "國道1號", "台74線" 以便比對
+        function normalizeRoadName(name) {
+            if (!name) return "";
+            let normalized = name;
+            
+            // 處理中文數字一到九 (簡單對應)
+            const cnNums = {'一':'1', '二':'2', '三':'3', '四':'4', '五':'5', '六':'6', '七':'7', '八':'8', '九':'9', '十':'10'};
+            
+            // 特殊處理國道：國道一號 -> 國道1號
+            if (normalized.startsWith("國道")) {
+                normalized = normalized.replace(/[一二三四五六七八九十]+/g, (match) => {
+                    // 這裡做個簡單轉換，若有複雜數字(如六十八)可能需要更強的 parser，但目前國道號碼多為個位或雙位
+                    // 暫時只處理個位數轉換，或者直接 mapping 常見國道
+                    if (match === '一') return '1';
+                    if (match === '三') return '3';
+                    if (match === '五') return '5';
+                    // ... 可視需要擴充，或使用更通用的轉換
+                    return match; 
+                });
+            }
+            
+            return normalized;
+        }
+
         function checkProximity(lat, lng, speed = 0, heading = null) {
             fetchRoadName(lat, lng);
 
@@ -381,9 +409,8 @@
             
             let minDist = Infinity;
             let nearestCam = null;
-            let debugMsg = ""; // 用於記錄最近相機的判定原因
+            let debugMsg = ""; 
 
-            // 先找出絕對距離最近的相機 (無論方向) 用於除錯顯示
             let absNearest = null;
             let absMinDist = Infinity;
 
@@ -404,7 +431,6 @@
                 const hasHeadingData = speed > 5 && heading !== null;
 
                 if (hasDirectionData && hasHeadingData) {
-                    // Layer 2: 方向性過濾
                     let headingDiff = Math.abs(heading - cam.direction);
                     if (headingDiff > 180) headingDiff = 360 - headingDiff;
                     if (headingDiff > CONFIG.HEADING_TOLERANCE) {
@@ -412,7 +438,6 @@
                         failReason = `角度偏 ${Math.round(headingDiff)}°`;
                     }
 
-                    // Layer 3: 扇形偵測
                     if (isThreat) {
                         const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
                         const expectedUpstreamBearing = (cam.direction + 180) % 360;
@@ -426,19 +451,18 @@
                 } 
                 else {
                     if (currentRoadName && currentRoadName !== "未知道路" && cam.address) {
-                        // 修正後的路名處理邏輯
-                        let userRoadBase = currentRoadName;
+                        // 1. 正規化路名 (處理國道數字問題)
+                        const normUserRoad = normalizeRoadName(currentRoadName);
                         
-                        // 1. 移除 "段" (前面必須是數字或中文數字)
-                        userRoadBase = userRoadBase.replace(/(\d+|[一二三四五六七八九十]+)段.*/, '');
-                        
-                        // 2. 移除 "巷", "弄", "號"
+                        // 2. 處理一般道路：移除 (數字+段) 或 (中文字+段) 或 巷弄號
+                        // 對於 "國道1號"，這行 replace 不會影響太多，因為它沒有 "段"
+                        let userRoadBase = normUserRoad.replace(/(\d+|[一二三四五六七八九十]+)段.*/, '');
                         userRoadBase = userRoadBase.replace(/(巷|弄|號).*/, '').trim();
                         
-                        // 3. 處理相機地址：移除分隔符
+                        // 3. 處理相機地址
                         const camAddressClean = cam.address.replace(/[-_/\s]/g, '');
 
-                        // 只有當核心路名長度 > 1 且相機地址完全不包含它時，才判定為不符
+                        // 判斷
                         if (userRoadBase.length > 1 && !camAddressClean.includes(userRoadBase)) {
                             isThreat = false;
                             failReason = "路名不符";
@@ -458,7 +482,6 @@
                 }
             }
             
-            // 更新除錯訊息
             const debugEl = document.getElementById('detection-debug-info');
             if (nearestCam) {
                 debugEl.innerText = `鎖定: ${nearestCam.limit}k (${Math.round(minDist)}m)`;
@@ -549,7 +572,6 @@
             let mockSpeed = Math.floor(Math.random() * 40) + 40; 
             const simHeading = getBearing(start.lat, start.lng, targetLatLng.lat, targetLatLng.lng);
 
-            // 繪製模擬路徑線
             if(pathLine) map.removeLayer(pathLine);
             pathLine = L.polyline([start, targetLatLng], {color: 'blue', dashArray: '5, 10'}).addTo(map);
 
@@ -562,7 +584,6 @@
                 userMarker.setLatLng([lat, lng]);
                 map.panTo([lat, lng]);
                 
-                // 更新除錯面板的方向顯示
                 document.getElementById('debug-heading').innerText = `方向: ${Math.round(simHeading)}°`;
                 
                 checkProximity(lat, lng, mockSpeed, simHeading);
@@ -571,9 +592,9 @@
                     clearInterval(simInterval); 
                     isSimulating = false; 
                     updateUI(Infinity, null, 0); 
-                    if(pathLine) map.removeLayer(pathLine); // 到達後移除線條
+                    if(pathLine) map.removeLayer(pathLine); 
                 }
-            }, 50); // 稍微放慢一點模擬速度以便觀察
+            }, 50); 
         }
         
         function getBearing(lat1, lng1, lat2, lng2) {
