@@ -214,7 +214,7 @@
             RESET_DIST: 600, // 重置狀態
             HEADING_TOLERANCE: 45, 
             CONE_ANGLE: 30,
-            OFFSET_PIXELS: 300 // 增加偏移量，讓車子更靠上 (原為 150)
+            OFFSET_PIXELS: 200 // 調整偏移量至 200，讓車輛位置適中
         };
         
         let map, userMarker, pathLine;
@@ -316,13 +316,13 @@
 
             document.getElementById('map').classList.add('mode-street');
             
-            // 初始使用 offset center
-            const center = getOffsetCenter(currentPos.lat, currentPos.lng, 15.9);
+            // 初始使用 offset center，Zoom Level 調整為 15.3 (更廣闊的視野)
+            const center = getOffsetCenter(currentPos.lat, currentPos.lng, 15.3);
             map = L.map('map', { 
                 zoomControl: false, 
                 layers: [osmLayer], 
                 zoomSnap: 0.1 
-            }).setView(center, 15.9);
+            }).setView(center, 15.3);
             
             L.control.layers({ "深色 (Dark)": darkLayer, "淺色 (Light)": lightLayer, "街道 (Street)": osmLayer }, null, {position: 'topright'}).addTo(map);
 
@@ -596,9 +596,9 @@
                     
                     userMarker.setLatLng([latitude, longitude]);
                     
-                    // 修正：使用 offset center
-                    const center = getOffsetCenter(latitude, longitude, 15.9);
-                    map.setView(center, 15.9); 
+                    // 修正：Zoom Level 為 15.3 (視野更廣)
+                    const center = getOffsetCenter(latitude, longitude, 15.3);
+                    map.setView(center, 15.3); 
                     
                     const kmh = speed ? Math.round(speed * 3.6) : 0;
                     
@@ -656,11 +656,9 @@
                 currentPos = { lat, lng };
                 userMarker.setLatLng([lat, lng]);
                 
-                // 修正：使用 offset center
-                const center = getOffsetCenter(lat, lng, 15.9);
-                map.setView(center, 15.9); // Use setView to keep offset
-                // Note: panTo with offset calculation is tricky, setView is easier here but resets zoom
-                // For simulation smoothness, typically panTo is better, but to keep offset consistently we use setView or calculate offset point
+                // 修正：使用 offset center，Zoom Level 15.3
+                const center = getOffsetCenter(lat, lng, 15.3);
+                map.setView(center, 15.3); 
                 
                 document.getElementById('debug-heading').innerText = `方向: ${Math.round(simHeading)}°`;
                 
