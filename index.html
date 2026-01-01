@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3069/3069172.png">
     
-    <title>小企鵝超速雷達 (High Offset)</title>
+    <title>小企鵝超速雷達 (Start Screen)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -77,6 +77,16 @@
         }
         .btn-location:active { transform: scale(0.9); background-color: #1D4ED8; }
         
+        /* 啟動畫面樣式 */
+        #start-screen {
+            position: fixed; inset: 0;
+            background-color: #111827; /* 深灰背景 */
+            z-index: 9999;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            color: white;
+        }
+
         @keyframes pulse {
             0% { opacity: 0.3; border-color: rgba(220, 38, 38, 0.4); }
             50% { opacity: 1; border-color: rgba(220, 38, 38, 1); }
@@ -112,6 +122,17 @@
     </style>
 </head>
 <body>
+
+    <!-- 啟動畫面 -->
+    <div id="start-screen">
+        <div class="text-6xl mb-6">🐧</div>
+        <h1 class="text-3xl font-bold mb-2">小企鵝超速雷達</h1>
+        <p class="text-gray-400 mb-8 text-sm">精準警示 • 安全駕駛</p>
+        <button onclick="startApp()" class="px-8 py-4 bg-blue-600 rounded-full text-xl font-bold shadow-lg hover:bg-blue-500 transition active:scale-95 flex items-center gap-2">
+            <span>🚀 開始使用</span>
+        </button>
+        <p class="mt-4 text-xs text-gray-500">點擊以啟用語音與 GPS</p>
+    </div>
 
     <div id="alert-overlay"></div>
 
@@ -240,8 +261,6 @@
                     this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 }
                 if (this.audioCtx.state === 'suspended') {
-                    // 瀏覽器可能會阻擋自動播放，需要使用者互動才能 resume
-                    // 這裡嘗試 resume，但如果不成功，會在 toggleAudio 時再次嘗試
                     this.audioCtx.resume().catch(() => {});
                 }
             },
@@ -281,13 +300,25 @@
         function init() {
             initMap();
             loadCameras();
+            // 注意：這裡不再自動呼叫 startGPS() 或 requestWakeLock()
+            // 而是等待使用者點擊「開始使用」按鈕
+        }
+
+        // 新增：App 啟動流程 (使用者點擊按鈕後觸發)
+        function startApp() {
+            const screen = document.getElementById('start-screen');
+            screen.style.transition = 'opacity 0.5s';
+            screen.style.opacity = '0';
+            setTimeout(() => screen.remove(), 500); // 淡出並移除開始畫面
+
+            // 1. 啟用 GPS
             startGPS();
+            
+            // 2. 請求螢幕恆亮
             requestWakeLock();
             
-            // 初始化音效引擎
+            // 3. 初始化音效並播放歡迎詞
             BeepManager.init();
-            
-            // 播放歡迎語音 (瀏覽器可能會阻擋自動播放，需有互動)
             speak("歡迎使用小企鵝測速警示系統");
         }
 
