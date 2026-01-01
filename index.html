@@ -77,18 +77,25 @@
             background: rgba(0, 0, 0, 0.9);
         }
         
+        /* 修正：加粗與加大箭頭樣式 */
         .camera-direction-arrow {
             position: absolute;
             top: 50%; left: 50%;
             width: 0; height: 0;
-            border-left: 6px solid transparent;
-            border-right: 6px solid transparent;
-            border-bottom: 14px solid #FACC15; 
+            /* 加寬底部 */
+            border-left: 10px solid transparent;
+            border-right: 10px solid transparent;
+            /* 加長箭頭 */
+            border-bottom: 24px solid #FACC15; 
             transform-origin: center bottom;
-            margin-left: -6px;
-            margin-top: -20px;
+            /* 重新計算中心點位移 (margin-left 為寬度的一半) */
+            margin-left: -10px;
+            /* 往上移動，讓箭頭底部剛好切齊圓形圖示中心或稍上方 */
+            margin-top: -32px;
             z-index: 10;
-            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.5));
+            /* 加強陰影，讓黃色箭頭在淺色地圖上也看得到 */
+            filter: drop-shadow(0 2px 3px rgba(0,0,0,0.6));
+            pointer-events: none; /* 避免擋住點擊 */
         }
     </style>
 </head>
