@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3069/3069172.png">
     
-    <title>小企鵝超速雷達 (3-Stage Alert)</title>
+    <title>小企鵝超速雷達 (Offset View)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -195,7 +195,8 @@
             PASS_DIST: 100,  // 第三段：通過 (100m)
             RESET_DIST: 600, // 重置狀態
             HEADING_TOLERANCE: 45, 
-            CONE_ANGLE: 30  
+            CONE_ANGLE: 30,
+            OFFSET_PIXELS: 150 // 地圖中心偏移量 (像素)，用於避開儀表板
         };
         
         let map, userMarker, pathLine;
@@ -297,11 +298,13 @@
 
             document.getElementById('map').classList.add('mode-street');
             
+            // 初始使用 offset center
+            const center = getOffsetCenter(currentPos.lat, currentPos.lng, 15.9);
             map = L.map('map', { 
                 zoomControl: false, 
                 layers: [osmLayer], 
                 zoomSnap: 0.1 
-            }).setView([currentPos.lat, currentPos.lng], 15.9);
+            }).setView(center, 15.9);
             
             L.control.layers({ "深色 (Dark)": darkLayer, "淺色 (Light)": lightLayer, "街道 (Street)": osmLayer }, null, {position: 'topright'}).addTo(map);
 
@@ -324,6 +327,22 @@
                 if(!watchId) startSimulation(e.latlng); 
                 else alert("GPS 運行中。請先點擊右側「🚗 模擬行駛」按鈕切換模式。");
             });
+        }
+
+        // --- 視角偏移計算 ---
+        function getOffsetCenter(lat, lng, zoom) {
+            // 如果地圖尚未初始化，先回傳原座標
+            if (!map) return [lat, lng];
+            
+            // 將座標轉為螢幕像素點 (Pixel Point)
+            const point = map.project([lat, lng], zoom);
+            
+            // 將 Y 軸加上偏移量 (向下移動，讓地圖中心在車子下方)
+            // 這樣車子就會在螢幕的上方
+            const offsetPoint = point.add([0, CONFIG.OFFSET_PIXELS]);
+            
+            // 轉回經緯度
+            return map.unproject(offsetPoint, zoom);
         }
 
         async function loadCameras() {
@@ -556,7 +575,10 @@
                     currentPos = { lat: latitude, lng: longitude };
                     
                     userMarker.setLatLng([latitude, longitude]);
-                    map.setView([latitude, longitude], 15.9); 
+                    
+                    // 修正：使用 offset center
+                    const center = getOffsetCenter(latitude, longitude, 15.9);
+                    map.setView(center, 15.9); 
                     
                     const kmh = speed ? Math.round(speed * 3.6) : 0;
                     
@@ -613,7 +635,12 @@
                 const lng = start.lng + (targetLatLng.lng - start.lng) * progress;
                 currentPos = { lat, lng };
                 userMarker.setLatLng([lat, lng]);
-                map.panTo([lat, lng]);
+                
+                // 修正：使用 offset center
+                const center = getOffsetCenter(lat, lng, 15.9);
+                map.setView(center, 15.9); // Use setView to keep offset
+                // Note: panTo with offset calculation is tricky, setView is easier here but resets zoom
+                // For simulation smoothness, typically panTo is better, but to keep offset consistently we use setView or calculate offset point
                 
                 document.getElementById('debug-heading').innerText = `方向: ${Math.round(simHeading)}°`;
                 
