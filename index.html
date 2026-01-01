@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3069/3069172.png">
     
-    <title>小企鵝超速雷達 (Strict Direction)</title>
+    <title>小企鵝超速雷達 (Visual Update)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -77,25 +77,20 @@
             background: rgba(0, 0, 0, 0.9);
         }
         
-        /* 修正：加粗與加大箭頭樣式 */
+        /* 箭頭樣式 */
         .camera-direction-arrow {
             position: absolute;
             top: 50%; left: 50%;
             width: 0; height: 0;
-            /* 加寬底部 */
             border-left: 10px solid transparent;
             border-right: 10px solid transparent;
-            /* 加長箭頭 */
             border-bottom: 24px solid #FACC15; 
             transform-origin: center bottom;
-            /* 重新計算中心點位移 (margin-left 為寬度的一半) */
             margin-left: -10px;
-            /* 往上移動，讓箭頭底部剛好切齊圓形圖示中心或稍上方 */
             margin-top: -32px;
             z-index: 10;
-            /* 加強陰影，讓黃色箭頭在淺色地圖上也看得到 */
             filter: drop-shadow(0 2px 3px rgba(0,0,0,0.6));
-            pointer-events: none; /* 避免擋住點擊 */
+            pointer-events: none;
         }
     </style>
 </head>
@@ -147,7 +142,7 @@
             <div class="text-lg font-bold text-blue-300 truncate mt-1" id="current-road-display">
                 偵測中...
             </div>
-            <!-- 偵測除錯資訊：顯示判定結果 -->
+            <!-- 偵測除錯資訊 -->
             <div class="text-[10px] text-yellow-500 mt-1 truncate" id="detection-debug-info">
                 等待移動...
             </div>
@@ -187,27 +182,19 @@
 
         const DATA_URL = './cameras.json'; 
 
-        // 模擬資料：加入方向 (0-360)
-        // 注意：方向是指「車流方向」。
-        // 例如：信義路是東西向，如果相機拍「往東」的車，direction 應為 90。
+        // 模擬資料：加入 direct 原始文字
         const MOCK_DATA = [
-            { id: "mock1", address: "臺北市信義區信義路五段", limit: 50, lat: 25.032969, lng: 121.560000, direction: 90 },
-            { id: "mock2", address: "臺北市信義區松高路", limit: 60, lat: 25.035000, lng: 121.568000, direction: 270 },
-            { id: "mock3", address: "國道1號南向", limit: 100, lat: 25.060000, lng: 121.500000, direction: 180 }
+            { id: "mock1", address: "臺北市信義區信義路五段", limit: 50, lat: 25.032969, lng: 121.560000, direction: 90, direct: "往東" },
+            { id: "mock2", address: "臺北市信義區松高路", limit: 60, lat: 25.035000, lng: 121.568000, direction: 270, direct: "西向" },
+            { id: "mock3", address: "國道1號南向", limit: 100, lat: 25.060000, lng: 121.500000, direction: 180, direct: "南向" }
         ];
 
-        // 參數設定 (嚴格模式)
         const CONFIG = { 
             WARN_DIST: 600, 
             ALERT_DIST: 300, 
             RESET_DIST: 800,
-            
-            // Layer 2: 方向容許誤差 (CarHeading vs CamDirection)
-            // 縮小至 45 度，排除垂直與大角度對向
             HEADING_TOLERANCE: 45, 
-            
-            // Layer 3: 上游扇形偵測區角度
-            CONE_ANGLE: 60         
+            CONE_ANGLE: 30  // 縮小扇形角度至 30 度
         };
         
         let map, userMarker, pathLine;
@@ -354,13 +341,18 @@
 
                 const addressText = cam.address ? cam.address : "地址未知";
                 const regionText = cam.region ? `[${cam.region}] ` : "";
-                const dirText = typeof cam.direction !== 'undefined' ? ` | 車流向: ${cam.direction}°` : "";
+                
+                // 顯示原始方向文字 (如 "往北")
+                const rawDirectText = cam.direct || "";
                 
                 L.marker([cam.lat, cam.lng], {icon: icon})
                     .bindPopup(`
                         <div class="text-center">
-                            <div class="text-xl font-bold text-red-400 mb-1">${cam.limit} <span class="text-sm text-white">km/h</span></div>
-                            <div class="text-sm text-gray-300 border-t border-gray-600 pt-1 mt-1">${regionText}${addressText}${dirText}</div>
+                            <div class="text-xl font-bold text-red-400 mb-1">
+                                ${cam.limit} <span class="text-sm text-white">km/h</span>
+                                ${rawDirectText ? `<span class="text-base text-yellow-300 ml-2 font-normal">(${rawDirectText})</span>` : ''}
+                            </div>
+                            <div class="text-sm text-gray-300 border-t border-gray-600 pt-1 mt-1">${regionText}${addressText}</div>
                         </div>
                     `)
                     .addTo(map);
@@ -435,14 +427,11 @@
 
                 if (hasDirectionData && hasHeadingData) {
                     // Layer 2: 方向性過濾
-                    // 計算車輛方向與相機車流方向的差異
                     let headingDiff = Math.abs(heading - cam.direction);
                     if (headingDiff > 180) headingDiff = 360 - headingDiff;
-                    
-                    // 如果差異大於容許值 (45度)，視為方向不符 (如對向、垂直)
                     if (headingDiff > CONFIG.HEADING_TOLERANCE) {
                         isThreat = false;
-                        failReason = `方向不符 (偏${Math.round(headingDiff)}°)`;
+                        failReason = `角度偏 ${Math.round(headingDiff)}°`;
                     }
 
                     // Layer 3: 扇形偵測
@@ -458,7 +447,6 @@
                     }
                 } 
                 else {
-                    // 資料無方向資訊：降級使用路名比對
                     if (currentRoadName && currentRoadName !== "未知道路" && cam.address) {
                         const normUserRoad = normalizeRoadName(currentRoadName);
                         let userRoadBase = normUserRoad.replace(/(\d+|[一二三四五六七八九十]+)段.*/, '');
@@ -469,10 +457,6 @@
                             isThreat = false;
                             failReason = "路名不符";
                         }
-                    } else {
-                        // 如果也沒有路名資訊，則預設無法過濾 (保持 isThreat = true)
-                        // 但標記原因以便除錯
-                        if (!hasDirectionData) failReason = "資料無方向 (路名未知)";
                     }
                 }
 
@@ -493,8 +477,7 @@
                 debugEl.innerText = `鎖定: ${nearestCam.limit}k (${Math.round(minDist)}m)`;
                 debugEl.className = "text-[10px] text-green-400 mt-1 truncate";
             } else if (absNearest && absMinDist < 800) {
-                // 如果附近有相機但被忽略，顯示原因
-                debugEl.innerText = `最近 ${Math.round(absMinDist)}m - ${debugMsg}`;
+                debugEl.innerText = `最近 ${Math.round(absMinDist)}m (${absNearest.address}) - ${debugMsg}`;
                 debugEl.className = "text-[10px] text-gray-400 mt-1 truncate";
             } else {
                 debugEl.innerText = "範圍內無測速";
