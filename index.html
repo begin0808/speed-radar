@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3069/3069172.png">
     
-    <title>小企鵝超速雷達 (Visual Update)</title>
+    <title>小企鵝超速雷達 (3-Stage Alert)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -77,7 +77,6 @@
             background: rgba(0, 0, 0, 0.9);
         }
         
-        /* 箭頭樣式 */
         .camera-direction-arrow {
             position: absolute;
             top: 50%; left: 50%;
@@ -182,19 +181,21 @@
 
         const DATA_URL = './cameras.json'; 
 
-        // 模擬資料：加入 direct 原始文字
+        // 模擬資料
         const MOCK_DATA = [
             { id: "mock1", address: "臺北市信義區信義路五段", limit: 50, lat: 25.032969, lng: 121.560000, direction: 90, direct: "往東" },
             { id: "mock2", address: "臺北市信義區松高路", limit: 60, lat: 25.035000, lng: 121.568000, direction: 270, direct: "西向" },
             { id: "mock3", address: "國道1號南向", limit: 100, lat: 25.060000, lng: 121.500000, direction: 180, direct: "南向" }
         ];
 
+        // 警示距離設定 (三段式)
         const CONFIG = { 
-            WARN_DIST: 600, 
-            ALERT_DIST: 300, 
-            RESET_DIST: 800,
+            WARN_DIST: 500,  // 第一段：預警 (500m)
+            ALERT_DIST: 200, // 第二段：緊急 (200m)
+            PASS_DIST: 100,  // 第三段：通過 (100m)
+            RESET_DIST: 600, // 重置狀態
             HEADING_TOLERANCE: 45, 
-            CONE_ANGLE: 30  // 縮小扇形角度至 30 度
+            CONE_ANGLE: 30  
         };
         
         let map, userMarker, pathLine;
@@ -202,13 +203,58 @@
         let currentPos = { lat: 25.033964, lng: 121.564468 }; 
         let watchId = null;
         let audioEnabled = false;
-        let speechState = { hasWarned600: false, hasWarned300: false, currentCameraId: null };
+        let speechState = { hasWarned500: false, hasWarned200: false, currentCameraId: null };
         let isSimulating = false;
         let simInterval;
         let wakeLock = null;
         let currentRoadName = null;
         let lastRoadFetchTime = 0;
         let lastRoadFetchPos = null;
+
+        // --- 音效管理 (Beep Manager) ---
+        const BeepManager = {
+            audioCtx: null,
+            interval: null,
+            init: function() {
+                if (!this.audioCtx) {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (this.audioCtx.state === 'suspended') {
+                    this.audioCtx.resume();
+                }
+            },
+            playTone: function() {
+                if (!this.audioCtx) return;
+                const osc = this.audioCtx.createOscillator();
+                const gain = this.audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(this.audioCtx.destination);
+                
+                // 嗶嗶聲設定 (高音)
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(880, this.audioCtx.currentTime); // 880Hz
+                osc.frequency.exponentialRampToValueAtTime(440, this.audioCtx.currentTime + 0.1);
+                
+                gain.gain.setValueAtTime(0.1, this.audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.1);
+                
+                osc.start();
+                osc.stop(this.audioCtx.currentTime + 0.1);
+            },
+            start: function() {
+                this.init();
+                if (!this.interval) {
+                    this.playTone(); // 立即響一聲
+                    this.interval = setInterval(() => this.playTone(), 600); // 每0.6秒響一次
+                }
+            },
+            stop: function() {
+                if (this.interval) {
+                    clearInterval(this.interval);
+                    this.interval = null;
+                }
+            }
+        };
 
         function init() {
             initMap();
@@ -301,7 +347,6 @@
             cameras.forEach(cam => {
                 let arrowHtml = '';
                 if (typeof cam.direction !== 'undefined') {
-                    // 黃色箭頭指向車流方向
                     arrowHtml = `<div class="camera-direction-arrow" style="transform: rotate(${cam.direction}deg);"></div>`;
                     
                     const r = 0.003; 
@@ -341,8 +386,6 @@
 
                 const addressText = cam.address ? cam.address : "地址未知";
                 const regionText = cam.region ? `[${cam.region}] ` : "";
-                
-                // 顯示原始方向文字 (如 "往北")
                 const rawDirectText = cam.direct || "";
                 
                 L.marker([cam.lat, cam.lng], {icon: icon})
@@ -426,7 +469,6 @@
                 const hasHeadingData = speed > 5 && heading !== null;
 
                 if (hasDirectionData && hasHeadingData) {
-                    // Layer 2: 方向性過濾
                     let headingDiff = Math.abs(heading - cam.direction);
                     if (headingDiff > 180) headingDiff = 360 - headingDiff;
                     if (headingDiff > CONFIG.HEADING_TOLERANCE) {
@@ -434,7 +476,6 @@
                         failReason = `角度偏 ${Math.round(headingDiff)}°`;
                     }
 
-                    // Layer 3: 扇形偵測
                     if (isThreat) {
                         const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
                         const expectedUpstreamBearing = (cam.direction + 180) % 360;
@@ -610,31 +651,80 @@
             document.getElementById('speed-display').innerText = speed;
             const elDist = document.getElementById('distance-display');
             const elMsgBox = document.getElementById('alert-message-box');
+            
+            // Clear alerts if far away or no camera
             if (dist > 2000 || !cam) {
-                elDist.innerText = "--"; document.getElementById('alert-overlay').style.display = 'none'; elMsgBox.classList.add('hidden'); return;
+                elDist.innerText = "--"; 
+                document.getElementById('alert-overlay').style.display = 'none'; 
+                elMsgBox.classList.add('hidden');
+                BeepManager.stop(); // Stop sound
+                return;
             }
+            
             elDist.innerText = Math.round(dist);
             document.getElementById('limit-val').innerText = cam.limit;
-            if (dist <= CONFIG.ALERT_DIST) {
+            
+            // --- UI 狀態依據距離切換 ---
+            if (dist <= CONFIG.PASS_DIST) {
+                // Stage 3: 通過 (<100m) - 紅色 + 音效
+                document.getElementById('alert-overlay').style.display = 'block';
+                elMsgBox.classList.remove('hidden');
+                elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
+            } else if (dist <= CONFIG.ALERT_DIST) {
+                // Stage 2: 緊急 (<200m) - 紅色 + 靜音
                 document.getElementById('alert-overlay').style.display = 'block';
                 elMsgBox.classList.remove('hidden');
                 elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
             } else if (dist <= CONFIG.WARN_DIST) {
+                // Stage 1: 預警 (<500m) - 黃色
                 document.getElementById('alert-overlay').style.display = 'none';
                 elMsgBox.classList.remove('hidden');
                 elMsgBox.innerHTML = `<span class="text-lg font-bold text-yellow-300">🔔 前方測速</span>`;
             } else {
-                document.getElementById('alert-overlay').style.display = 'none'; elMsgBox.classList.add('hidden');
+                document.getElementById('alert-overlay').style.display = 'none'; 
+                elMsgBox.classList.add('hidden');
+            }
+            
+            // 音效控制：離開 100m 後停止音效
+            if (dist > CONFIG.PASS_DIST) {
+                BeepManager.stop();
             }
         }
+
         function handleVoiceAlert(dist, cam) {
             if (!audioEnabled || !cam) return;
-            if (speechState.currentCameraId !== cam.id || dist > CONFIG.RESET_DIST) speechState = { hasWarned600: false, hasWarned300: false, currentCameraId: cam.id };
-            if (dist <= CONFIG.WARN_DIST && dist > CONFIG.ALERT_DIST && !speechState.hasWarned600) { speak(`前方測速，限速${cam.limit}`); speechState.hasWarned600 = true; }
-            if (dist <= CONFIG.ALERT_DIST && !speechState.hasWarned300) { speak(`注意，限速${cam.limit}`); speechState.hasWarned300 = true; }
+            
+            // 重置狀態
+            if (speechState.currentCameraId !== cam.id || dist > CONFIG.RESET_DIST) {
+                speechState = { hasWarned500: false, hasWarned200: false, currentCameraId: cam.id };
+                BeepManager.stop();
+            }
+
+            // Stage 1: 500m 預警
+            if (dist <= CONFIG.WARN_DIST && dist > CONFIG.ALERT_DIST && !speechState.hasWarned500) {
+                speak(`前方測速，限速${cam.limit}`);
+                speechState.hasWarned500 = true;
+            }
+            
+            // Stage 2: 200m 緊急
+            if (dist <= CONFIG.ALERT_DIST && dist > CONFIG.PASS_DIST && !speechState.hasWarned200) {
+                speak(`注意，限速${cam.limit}`);
+                speechState.hasWarned200 = true;
+            }
+            
+            // Stage 3: 100m 通過 (音效)
+            if (dist <= CONFIG.PASS_DIST) {
+                BeepManager.start(); // 啟動連續音效
+            }
         }
+        
         function speak(text) { window.speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang = 'zh-TW'; u.rate = 1.2; window.speechSynthesis.speak(u); }
-        function enableAudio() { audioEnabled = true; document.getElementById('btn-audio').innerText = "🔊 語音開啟"; speak("語音啟動"); }
+        function enableAudio() { 
+            audioEnabled = true; 
+            document.getElementById('btn-audio').innerText = "🔊 語音開啟"; 
+            speak("語音啟動"); 
+            BeepManager.init(); // 初始化音效引擎
+        }
         
         init();
     </script>
