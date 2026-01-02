@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="penguin.png">
     
-    <title>小企鵝超速雷達 (Color Coded)</title>
+    <title>小企鵝超速雷達 (Manual Calc)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -257,6 +257,9 @@
         let lastUserInteractionTime = 0;
         let isUserInteracting = false;
         let popupTimer = null;
+        
+        // 新增：上一筆 GPS 資料，用於手動計算速度
+        let lastGpsData = null;
 
         const BeepManager = {
             audioCtx: null,
@@ -429,9 +432,7 @@
 
         function renderCameras() {
             cameras.forEach(cam => {
-                // 檢查是否為國道或快速道路
                 const isHighway = cam.address.includes("國道") || cam.address.includes("快速道路");
-                // 設定顏色：國道用紫色 (#9333EA)，一般道路用紅色 (#DC2626)
                 const bgColorClass = isHighway ? "bg-purple-600" : "bg-red-600";
                 
                 let arrowHtml = '';
@@ -490,8 +491,7 @@
                     .addTo(map);
             });
         }
-        
-        // ... (以下 GPS, 計算距離, UI 更新等函式維持不變) ...
+
         async function fetchRoadName(lat, lng) {
             const now = Date.now();
             if (now - lastRoadFetchTime < 5000 && lastRoadFetchPos && getDistance(lat, lng, lastRoadFetchPos.lat, lastRoadFetchPos.lng) < 30) {
@@ -530,14 +530,6 @@
             return normalized;
         }
 
-        // 取得或初始化相機狀態
-        function getCameraState(id) {
-            if (!cameraStates[id]) {
-                cameraStates[id] = { warned500: false, warned200: false, flashed: false };
-            }
-            return cameraStates[id];
-        }
-
         function checkProximity(lat, lng, speed = 0, heading = null) {
             fetchRoadName(lat, lng);
 
@@ -553,7 +545,6 @@
             for (let cam of cameras) {
                 const d = getDistance(lat, lng, cam.lat, cam.lng);
                 
-                // 重置邏輯 (離開相機超過重置距離)
                 if (d > CONFIG.RESET_DIST) {
                     if (cameraStates[cam.id]) {
                         cameraStates[cam.id] = { warned500: false, warned200: false, flashed: false };
@@ -676,9 +667,34 @@
 
             watchId = navigator.geolocation.watchPosition(
                 (pos) => {
-                    const { latitude, longitude, speed, heading, accuracy } = pos.coords;
-                    currentPos = { lat: latitude, lng: longitude };
+                    const { latitude, longitude, accuracy } = pos.coords;
+                    const now = Date.now();
                     
+                    // --- 手動計算速度與方向 (解決部分裝置回傳 null 的問題) ---
+                    let speed = pos.coords.speed;
+                    let heading = pos.coords.heading;
+
+                    if (lastGpsData) {
+                        const timeDelta = (now - lastGpsData.timestamp) / 1000; // 秒
+                        const distDelta = getDistance(lastGpsData.lat, lastGpsData.lng, latitude, longitude); // 公尺
+                        
+                        // 1. 補算速度 (若 GPS 沒給或為 0，但有移動)
+                        if ((speed === null || speed === 0) && timeDelta > 0 && distDelta > 0) {
+                            // 簡單平滑：直接算速度
+                            speed = distDelta / timeDelta; 
+                        }
+                        
+                        // 2. 補算方向 (若 GPS 沒給，且移動距離足夠 > 3m，避免原地亂跳)
+                        if ((heading === null || isNaN(heading)) && distDelta > 3) {
+                            heading = getBearing(lastGpsData.lat, lastGpsData.lng, latitude, longitude);
+                        }
+                    }
+
+                    // 更新上一筆資料
+                    lastGpsData = { lat: latitude, lng: longitude, timestamp: now };
+                    // -----------------------------------------------------
+
+                    currentPos = { lat: latitude, lng: longitude };
                     userMarker.setLatLng([latitude, longitude]);
                     
                     if (!isUserInteracting && (Date.now() - lastUserInteractionTime > CONFIG.AUTO_CENTER_DELAY)) {
@@ -688,12 +704,14 @@
                     
                     const kmh = speed ? Math.round(speed * 3.6) : 0;
                     
-                    debugHeading.innerText = `方向: ${heading !== null ? Math.round(heading) + '°' : '無'}`;
+                    debugHeading.innerText = `方向: ${heading !== null && !isNaN(heading) ? Math.round(heading) + '°' : '無'}`;
                     debugAccuracy.innerText = `精度: ${Math.round(accuracy)}m`;
 
                     if (accuracy > CONFIG.GPS_ACCURACY_THRESHOLD) {
                         indicator.className = "w-2 h-2 rounded-full bg-yellow-500 animate-pulse";
                         text.innerText = "GPS 定位中 (精度低)";
+                        // 當精度低時，仍更新除錯文字，但不執行警示
+                        document.getElementById('detection-debug-info').innerText = "GPS 訊號調整中...";
                         updateUI(Infinity, null, 0); 
                     } else {
                         indicator.className = "w-2 h-2 rounded-full bg-green-500 animate-pulse";
@@ -720,6 +738,7 @@
         startGPS = function() {
             isUserInteracting = false;
             lastUserInteractionTime = 0; 
+            lastGpsData = null; // 重置手動計算的基準點
             originalStartGPS();
             
             if (map && currentPos) {
@@ -813,7 +832,6 @@
             
             const state = getCameraState(cam.id);
 
-            // --- Stage 2: 紅色警戒 (200m 內) ---
             if (dist <= CONFIG.ALERT_DIST) {
                 
                 if (speed >= CONFIG.MIN_SPEED_ALERT) {
@@ -825,7 +843,6 @@
 
                 if (speed >= CONFIG.MIN_SPEED_ALERT && !state.flashed) {
                     state.flashed = true; 
-                    
                     visualState.id = cam.id;
                     visualState.flashEndTime = Date.now() + 5000;
                 }
@@ -855,13 +872,11 @@
             
             const state = getCameraState(cam.id);
 
-            // Stage 1: 500m 預警
             if (dist <= CONFIG.WARN_DIST && dist > CONFIG.ALERT_DIST && !state.warned500) {
                 speak(`前方測速，限速${cam.limit}`);
                 state.warned500 = true;
             }
             
-            // Stage 2: 200m 緊急
             if (dist <= CONFIG.ALERT_DIST && dist > CONFIG.PASS_DIST && !state.warned200) {
                 if (speed >= CONFIG.MIN_SPEED_ALERT) {
                     speak(`注意，限速${cam.limit}`);
@@ -869,7 +884,6 @@
                 }
             }
             
-            // Stage 3: 100m 通過
             if (dist <= CONFIG.PASS_DIST) {
                 BeepManager.start(); 
             }
