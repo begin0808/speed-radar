@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <!-- 加入 PWA 設定 -->
     <meta name="theme-color" content="#1a1a1a">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="penguin.png">
     
-    <title>小企鵝超速雷達 (Smart Logic)</title>
+    <title>小企鵝超速雷達 (Color Coded)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -240,27 +241,19 @@
         let currentPos = { lat: 25.033964, lng: 121.564468 }; 
         let watchId = null;
         let audioEnabled = true; 
-        
-        // 統一的相機狀態管理 (Voice + Visual)
-        // 使用物件來記錄每一支相機的觸發狀態
-        // key: camera_id, value: { warned500: bool, warned200: bool, flashed: bool }
-        let cameraStates = {}; 
-        
-        // 目前最近的相機 ID
-        let currentTargetId = null;
-
-        // 視覺互動狀態 (僅用於閃爍計時)
-        let visualState = { 
-            id: null,        
-            flashEndTime: 0  
-        };
-
+        let speechState = { hasWarned500: false, hasWarned200: false, currentCameraId: null };
         let isSimulating = false;
         let simInterval;
         let wakeLock = null;
         let currentRoadName = null;
         let lastRoadFetchTime = 0;
         let lastRoadFetchPos = null;
+        let interactionState = { 
+            id: null,        
+            warned500: false, 
+            warned200: false, 
+            flashEndTime: 0  
+        };
         let lastUserInteractionTime = 0;
         let isUserInteracting = false;
         let popupTimer = null;
@@ -377,7 +370,6 @@
                 else mapDiv.classList.add('mode-street');
             });
 
-            // 監聽地圖互動
             map.on('mousedown touchstart dragstart zoomstart', () => {
                 isUserInteracting = true;
             });
@@ -437,6 +429,11 @@
 
         function renderCameras() {
             cameras.forEach(cam => {
+                // 檢查是否為國道或快速道路
+                const isHighway = cam.address.includes("國道") || cam.address.includes("快速道路");
+                // 設定顏色：國道用紫色 (#9333EA)，一般道路用紅色 (#DC2626)
+                const bgColorClass = isHighway ? "bg-purple-600" : "bg-red-600";
+                
                 let arrowHtml = '';
                 if (typeof cam.direction !== 'undefined') {
                     arrowHtml = `<div class="camera-direction-arrow" style="transform: rotate(${cam.direction}deg);"></div>`;
@@ -464,7 +461,7 @@
                     html: `
                        <div class="relative w-8 h-8">
                            ${arrowHtml}
-                           <div class="w-8 h-8 bg-red-600 rounded-full flex items-center justify-center shadow-lg border-2 border-white relative z-20">
+                           <div class="w-8 h-8 ${bgColorClass} rounded-full flex items-center justify-center shadow-lg border-2 border-white relative z-20">
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5 text-white">
                               <path d="M12 9a3.75 3.75 0 100 7.5A3.75 3.75 0 0012 9z" />
                               <path fill-rule="evenodd" d="M9.344 3.071a49.52 49.52 0 015.312 0c.967.052 1.83.585 2.332 1.39l.821 1.317c.24.383.645.643 1.11.71.386.054.77.113 1.152.177 1.432.239 2.429 1.493 2.429 2.909V18a3 3 0 01-3 3h-15a3 3 0 01-3-3V9.574c0-1.416.997-2.67 2.429-2.909.382-.064.766-.123 1.151-.178a1.56 1.56 0 001.11-.71l.822-1.315a2.942 2.942 0 012.332-1.39zM6.75 12.75a5.25 5.25 0 1110.5 0 5.25 5.25 0 01-10.5 0zm12-1.5a.75.75 0 100-1.5.75.75 0 000 1.5z" clip-rule="evenodd" />
@@ -493,7 +490,8 @@
                     .addTo(map);
             });
         }
-
+        
+        // ... (以下 GPS, 計算距離, UI 更新等函式維持不變) ...
         async function fetchRoadName(lat, lng) {
             const now = Date.now();
             if (now - lastRoadFetchTime < 5000 && lastRoadFetchPos && getDistance(lat, lng, lastRoadFetchPos.lat, lastRoadFetchPos.lng) < 30) {
@@ -577,7 +575,6 @@
                 const hasHeadingData = speed > 5 && heading !== null;
 
                 if (hasDirectionData && hasHeadingData) {
-                    // Layer 2
                     let headingDiff = Math.abs(heading - cam.direction);
                     if (headingDiff > 180) headingDiff = 360 - headingDiff;
                     if (headingDiff > CONFIG.HEADING_TOLERANCE) {
@@ -585,7 +582,6 @@
                         failReason = `角度偏 ${Math.round(headingDiff)}°`;
                     }
 
-                    // Layer 3
                     if (isThreat) {
                         const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
                         const expectedUpstreamBearing = (cam.direction + 180) % 360;
@@ -597,7 +593,6 @@
                         }
                     }
                     
-                    // 國道特例
                     if (isThreat && (cam.address.includes("國道") || cam.address.includes("快速道路"))) {
                          if (currentRoadName && currentRoadName !== "未知道路") {
                              const normUserRoad = normalizeRoadName(currentRoadName);
@@ -647,12 +642,9 @@
                 debugEl.className = "text-[10px] text-gray-500 mt-1 truncate";
             }
             
-            // 更新狀態
             if (nearestCam) {
                 currentTargetId = nearestCam.id;
             } else {
-                // 如果目前沒偵測到任何相機，但也許還在上一支的警戒範圍內？
-                // 這裡簡化處理：如果沒相機，就停止音效
                 BeepManager.stop();
                 currentTargetId = null;
             }
@@ -824,7 +816,6 @@
             // --- Stage 2: 紅色警戒 (200m 內) ---
             if (dist <= CONFIG.ALERT_DIST) {
                 
-                // 1. 先顯示紅色文字 (只要進入範圍且速度夠快就顯示)
                 if (speed >= CONFIG.MIN_SPEED_ALERT) {
                     elMsgBox.classList.remove('hidden');
                     elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
@@ -832,25 +823,20 @@
                     elMsgBox.classList.add('hidden');
                 }
 
-                // 2. 處理閃爍邏輯 (單次觸發)
-                // 條件：速度夠快 + 尚未閃爍過
                 if (speed >= CONFIG.MIN_SPEED_ALERT && !state.flashed) {
-                    state.flashed = true; // 標記為已閃爍
+                    state.flashed = true; 
                     
-                    // 開始 5 秒閃爍
                     visualState.id = cam.id;
                     visualState.flashEndTime = Date.now() + 5000;
                 }
 
-                // 3. 執行閃爍 (檢查是否在 5 秒視窗內)
                 if (visualState.id === cam.id && Date.now() < visualState.flashEndTime && speed >= CONFIG.MIN_SPEED_ALERT) {
                     alertOverlay.style.display = 'block';
                 } else {
-                    alertOverlay.style.display = 'none'; // 時間到或速度低，停止閃爍
+                    alertOverlay.style.display = 'none'; 
                 }
 
             } else if (dist <= CONFIG.WARN_DIST) {
-                // --- Stage 1: 黃色預警 (500m - 200m) ---
                 alertOverlay.style.display = 'none';
                 elMsgBox.classList.remove('hidden');
                 elMsgBox.innerHTML = `<span class="text-lg font-bold text-yellow-300">🔔 前方測速</span>`;
