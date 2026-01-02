@@ -3,14 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <!-- 加入 PWA 設定 -->
     <meta name="theme-color" content="#1a1a1a">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="penguin.png">
     
-    <title>小企鵝超速雷達 (Highway Logic)</title>
+    <title>小企鵝超速雷達 (Smart Logic)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -241,22 +240,29 @@
         let currentPos = { lat: 25.033964, lng: 121.564468 }; 
         let watchId = null;
         let audioEnabled = true; 
-        let speechState = { hasWarned500: false, hasWarned200: false, currentCameraId: null };
+        
+        // 統一的相機狀態管理 (Voice + Visual)
+        // 使用物件來記錄每一支相機的觸發狀態
+        // key: camera_id, value: { warned500: bool, warned200: bool, flashed: bool }
+        let cameraStates = {}; 
+        
+        // 目前最近的相機 ID
+        let currentTargetId = null;
+
+        // 視覺互動狀態 (僅用於閃爍計時)
+        let visualState = { 
+            id: null,        
+            flashEndTime: 0  
+        };
+
         let isSimulating = false;
         let simInterval;
         let wakeLock = null;
         let currentRoadName = null;
         let lastRoadFetchTime = 0;
         let lastRoadFetchPos = null;
-        let interactionState = { 
-            id: null,        
-            warned500: false, 
-            warned200: false, 
-            flashEndTime: 0  
-        };
         let lastUserInteractionTime = 0;
         let isUserInteracting = false;
-        // 彈出視窗計時器
         let popupTimer = null;
 
         const BeepManager = {
@@ -380,20 +386,16 @@
                 lastUserInteractionTime = Date.now();
             });
 
-            // --- 新增：資訊視窗自動關閉功能 ---
             map.on('popupopen', (e) => {
-                // 如果有舊的計時器，先清除
                 if (popupTimer) {
                     clearTimeout(popupTimer);
                     popupTimer = null;
                 }
-                // 設定 10 秒後自動關閉
                 popupTimer = setTimeout(() => {
                     e.popup.removeFrom(map);
                     popupTimer = null;
                 }, 10000);
             });
-            // 當視窗被手動關閉時，也清除計時器，避免影響下一次操作
             map.on('popupclose', () => {
                 if (popupTimer) {
                     clearTimeout(popupTimer);
@@ -530,6 +532,14 @@
             return normalized;
         }
 
+        // 取得或初始化相機狀態
+        function getCameraState(id) {
+            if (!cameraStates[id]) {
+                cameraStates[id] = { warned500: false, warned200: false, flashed: false };
+            }
+            return cameraStates[id];
+        }
+
         function checkProximity(lat, lng, speed = 0, heading = null) {
             fetchRoadName(lat, lng);
 
@@ -544,6 +554,14 @@
 
             for (let cam of cameras) {
                 const d = getDistance(lat, lng, cam.lat, cam.lng);
+                
+                // 重置邏輯 (離開相機超過重置距離)
+                if (d > CONFIG.RESET_DIST) {
+                    if (cameraStates[cam.id]) {
+                        cameraStates[cam.id] = { warned500: false, warned200: false, flashed: false };
+                    }
+                    continue; 
+                }
                 
                 if (d < absMinDist) {
                     absMinDist = d;
@@ -579,13 +597,9 @@
                         }
                     }
                     
-                    // --- 國道/快速道路 特殊過濾 (解決平面道路誤報) ---
-                    // 如果相機是國道 (地址含 "國道" 或 "快速道路")
-                    // 但使用者的當前路名 "不含" 國道/快速道路
-                    // 則視為在平面道路上，即使角度/距離符合，也強制忽略。
+                    // 國道特例
                     if (isThreat && (cam.address.includes("國道") || cam.address.includes("快速道路"))) {
                          if (currentRoadName && currentRoadName !== "未知道路") {
-                             // 正規化以防萬一 (國道一號 -> 國道1號)
                              const normUserRoad = normalizeRoadName(currentRoadName);
                              if (!normUserRoad.includes("國道") && !normUserRoad.includes("快速道路")) {
                                  isThreat = false;
@@ -633,12 +647,21 @@
                 debugEl.className = "text-[10px] text-gray-500 mt-1 truncate";
             }
             
+            // 更新狀態
+            if (nearestCam) {
+                currentTargetId = nearestCam.id;
+            } else {
+                // 如果目前沒偵測到任何相機，但也許還在上一支的警戒範圍內？
+                // 這裡簡化處理：如果沒相機，就停止音效
+                BeepManager.stop();
+                currentTargetId = null;
+            }
+            
             updateUI(minDist, nearestCam, speed);
             handleVoiceAlert(minDist, nearestCam, speed);
         }
 
         function startGPS() {
-            // 如果正在模擬，先停止
             if (isSimulating) { 
                 clearInterval(simInterval); 
                 isSimulating = false; 
@@ -650,7 +673,6 @@
             const debugHeading = document.getElementById('debug-heading');
             const debugAccuracy = document.getElementById('debug-accuracy');
 
-            // 確保 UI 顯示定位中
             indicator.className = "w-2 h-2 rounded-full bg-yellow-500 animate-pulse";
             text.innerText = "GPS 定位中...";
 
@@ -667,7 +689,6 @@
                     
                     userMarker.setLatLng([latitude, longitude]);
                     
-                    // --- 地圖自動回正邏輯 (10秒閒置檢測) ---
                     if (!isUserInteracting && (Date.now() - lastUserInteractionTime > CONFIG.AUTO_CENTER_DELAY)) {
                         const center = getOffsetCenter(latitude, longitude, 15.3);
                         map.setView(center, 15.3); 
@@ -678,16 +699,13 @@
                     debugHeading.innerText = `方向: ${heading !== null ? Math.round(heading) + '°' : '無'}`;
                     debugAccuracy.innerText = `精度: ${Math.round(accuracy)}m`;
 
-                    // --- 關鍵修正：精度過濾 ---
                     if (accuracy > CONFIG.GPS_ACCURACY_THRESHOLD) {
                         indicator.className = "w-2 h-2 rounded-full bg-yellow-500 animate-pulse";
                         text.innerText = "GPS 定位中 (精度低)";
-                        // 精度太差，不執行警示判斷，並清除畫面上的警示
                         updateUI(Infinity, null, 0); 
                     } else {
                         indicator.className = "w-2 h-2 rounded-full bg-green-500 animate-pulse";
                         text.innerText = "GPS 連線中";
-                        // 精度夠好，才執行警示判斷
                         checkProximity(latitude, longitude, kmh, heading);
                     }
                 },
@@ -706,11 +724,10 @@
             );
         }
 
-        // 重啟 GPS 時，強制回正地圖
         const originalStartGPS = startGPS;
         startGPS = function() {
             isUserInteracting = false;
-            lastUserInteractionTime = 0; // 立即觸發回正
+            lastUserInteractionTime = 0; 
             originalStartGPS();
             
             if (map && currentPos) {
@@ -750,7 +767,6 @@
                 currentPos = { lat, lng };
                 userMarker.setLatLng([lat, lng]);
                 
-                // 修正：使用 offset center，Zoom Level 15.3
                 const center = getOffsetCenter(lat, lng, 15.3);
                 map.setView(center, 15.3); 
                 
@@ -790,41 +806,59 @@
             document.getElementById('speed-display').innerText = speed;
             const elDist = document.getElementById('distance-display');
             const elMsgBox = document.getElementById('alert-message-box');
+            const alertOverlay = document.getElementById('alert-overlay');
             
-            // Clear alerts if far away or no camera
             if (dist > 2000 || !cam) {
                 elDist.innerText = "--"; 
-                document.getElementById('alert-overlay').style.display = 'none'; 
+                alertOverlay.style.display = 'none'; 
                 elMsgBox.classList.add('hidden');
-                BeepManager.stop(); // Stop sound
+                BeepManager.stop();
                 return;
             }
             
             elDist.innerText = Math.round(dist);
             document.getElementById('limit-val').innerText = cam.limit;
             
-            // --- UI 狀態依據距離切換 ---
-            if (dist <= CONFIG.PASS_DIST) {
-                // Stage 3: 通過 (<100m) - 紅色 + 音效
-                document.getElementById('alert-overlay').style.display = 'block';
-                elMsgBox.classList.remove('hidden');
-                elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
-            } else if (dist <= CONFIG.ALERT_DIST) {
-                // Stage 2: 緊急 (<200m) - 紅色 + 靜音
-                document.getElementById('alert-overlay').style.display = 'block';
-                elMsgBox.classList.remove('hidden');
-                elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
+            const state = getCameraState(cam.id);
+
+            // --- Stage 2: 紅色警戒 (200m 內) ---
+            if (dist <= CONFIG.ALERT_DIST) {
+                
+                // 1. 先顯示紅色文字 (只要進入範圍且速度夠快就顯示)
+                if (speed >= CONFIG.MIN_SPEED_ALERT) {
+                    elMsgBox.classList.remove('hidden');
+                    elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
+                } else {
+                    elMsgBox.classList.add('hidden');
+                }
+
+                // 2. 處理閃爍邏輯 (單次觸發)
+                // 條件：速度夠快 + 尚未閃爍過
+                if (speed >= CONFIG.MIN_SPEED_ALERT && !state.flashed) {
+                    state.flashed = true; // 標記為已閃爍
+                    
+                    // 開始 5 秒閃爍
+                    visualState.id = cam.id;
+                    visualState.flashEndTime = Date.now() + 5000;
+                }
+
+                // 3. 執行閃爍 (檢查是否在 5 秒視窗內)
+                if (visualState.id === cam.id && Date.now() < visualState.flashEndTime && speed >= CONFIG.MIN_SPEED_ALERT) {
+                    alertOverlay.style.display = 'block';
+                } else {
+                    alertOverlay.style.display = 'none'; // 時間到或速度低，停止閃爍
+                }
+
             } else if (dist <= CONFIG.WARN_DIST) {
-                // Stage 1: 預警 (<500m) - 黃色
-                document.getElementById('alert-overlay').style.display = 'none';
+                // --- Stage 1: 黃色預警 (500m - 200m) ---
+                alertOverlay.style.display = 'none';
                 elMsgBox.classList.remove('hidden');
                 elMsgBox.innerHTML = `<span class="text-lg font-bold text-yellow-300">🔔 前方測速</span>`;
             } else {
-                document.getElementById('alert-overlay').style.display = 'none'; 
+                alertOverlay.style.display = 'none'; 
                 elMsgBox.classList.add('hidden');
             }
             
-            // 音效控制：離開 100m 後停止音效
             if (dist > CONFIG.PASS_DIST) {
                 BeepManager.stop();
             }
@@ -833,29 +867,25 @@
         function handleVoiceAlert(dist, cam, speed) {
             if (!audioEnabled || !cam) return;
             
-            // 重置狀態
-            if (speechState.currentCameraId !== cam.id || dist > CONFIG.RESET_DIST) {
-                speechState = { hasWarned500: false, hasWarned200: false, currentCameraId: cam.id };
-                BeepManager.stop();
-            }
+            const state = getCameraState(cam.id);
 
             // Stage 1: 500m 預警
-            if (dist <= CONFIG.WARN_DIST && dist > CONFIG.ALERT_DIST && !speechState.hasWarned500) {
+            if (dist <= CONFIG.WARN_DIST && dist > CONFIG.ALERT_DIST && !state.warned500) {
                 speak(`前方測速，限速${cam.limit}`);
-                speechState.hasWarned500 = true;
+                state.warned500 = true;
             }
             
             // Stage 2: 200m 緊急
-            if (dist <= CONFIG.ALERT_DIST && dist > CONFIG.PASS_DIST && !speechState.hasWarned200) {
+            if (dist <= CONFIG.ALERT_DIST && dist > CONFIG.PASS_DIST && !state.warned200) {
                 if (speed >= CONFIG.MIN_SPEED_ALERT) {
                     speak(`注意，限速${cam.limit}`);
-                    speechState.hasWarned200 = true;
+                    state.warned200 = true;
                 }
             }
             
-            // Stage 3: 100m 通過 (音效)
+            // Stage 3: 100m 通過
             if (dist <= CONFIG.PASS_DIST) {
-                BeepManager.start(); // 啟動連續音效
+                BeepManager.start(); 
             }
         }
         
@@ -883,7 +913,7 @@
             audioEnabled = true; 
             document.getElementById('btn-audio').innerText = "🔊 語音開啟"; 
             speak("語音啟動"); 
-            BeepManager.init(); // 初始化音效引擎
+            BeepManager.init(); 
         }
         
         init();
