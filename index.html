@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="penguin.png">
     
-    <title>小企鵝超速雷達 (UX Update)</title>
+    <title>小企鵝超速雷達 (GPS Safe Check)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -230,9 +230,10 @@
             RESET_DIST: 600, 
             MIN_SPEED_ALERT: 20, 
             HEADING_TOLERANCE: 45, 
-            CONE_ANGLE: 20, // 已縮小為 20 度
+            CONE_ANGLE: 20, 
             OFFSET_PIXELS: 200,
-            AUTO_CENTER_DELAY: 10000 // 10秒自動回正
+            AUTO_CENTER_DELAY: 10000,
+            GPS_ACCURACY_THRESHOLD: 100 // GPS 精度門檻 (公尺)
         };
         
         let map, userMarker, pathLine;
@@ -368,7 +369,7 @@
                 else mapDiv.classList.add('mode-street');
             });
 
-            // 監聽地圖互動，實現延遲回正
+            // 監聽地圖互動
             map.on('mousedown touchstart dragstart zoomstart', () => {
                 isUserInteracting = true;
             });
@@ -383,9 +384,6 @@
                 iconSize: [24, 24], iconAnchor: [12, 12]
             });
             userMarker = L.marker([currentPos.lat, currentPos.lng], {icon: carIcon, zIndexOffset: 1000}).addTo(map);
-
-            // 移除地圖點擊的模擬行駛功能 (避免干擾)
-            // map.on('click', (e) => { ... });
         }
 
         function getOffsetCenter(lat, lng, zoom) {
@@ -538,7 +536,7 @@
                 const hasHeadingData = speed > 5 && heading !== null;
 
                 if (hasDirectionData && hasHeadingData) {
-                    // Layer 2: 方向性過濾
+                    // Layer 2
                     let headingDiff = Math.abs(heading - cam.direction);
                     if (headingDiff > 180) headingDiff = 360 - headingDiff;
                     if (headingDiff > CONFIG.HEADING_TOLERANCE) {
@@ -546,7 +544,7 @@
                         failReason = `角度偏 ${Math.round(headingDiff)}°`;
                     }
 
-                    // Layer 3: 扇形偵測
+                    // Layer 3
                     if (isThreat) {
                         const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
                         const expectedUpstreamBearing = (cam.direction + 180) % 360;
@@ -601,7 +599,6 @@
         }
 
         function startGPS() {
-            // 如果正在模擬，先停止
             if (isSimulating) { 
                 clearInterval(simInterval); 
                 isSimulating = false; 
@@ -613,6 +610,7 @@
             const debugHeading = document.getElementById('debug-heading');
             const debugAccuracy = document.getElementById('debug-accuracy');
 
+            // 確保 UI 顯示定位中
             indicator.className = "w-2 h-2 rounded-full bg-yellow-500 animate-pulse";
             text.innerText = "GPS 定位中...";
 
@@ -640,10 +638,18 @@
                     debugHeading.innerText = `方向: ${heading !== null ? Math.round(heading) + '°' : '無'}`;
                     debugAccuracy.innerText = `精度: ${Math.round(accuracy)}m`;
 
-                    checkProximity(latitude, longitude, kmh, heading);
-
-                    indicator.className = "w-2 h-2 rounded-full bg-green-500 animate-pulse";
-                    text.innerText = "GPS 連線中";
+                    // --- 關鍵修正：精度過濾 ---
+                    if (accuracy > CONFIG.GPS_ACCURACY_THRESHOLD) {
+                        indicator.className = "w-2 h-2 rounded-full bg-yellow-500 animate-pulse";
+                        text.innerText = "GPS 定位中 (精度低)";
+                        // 精度太差，不執行警示判斷，並清除畫面上的警示
+                        updateUI(Infinity, null, 0); 
+                    } else {
+                        indicator.className = "w-2 h-2 rounded-full bg-green-500 animate-pulse";
+                        text.innerText = "GPS 連線中";
+                        // 精度夠好，才執行警示判斷
+                        checkProximity(latitude, longitude, kmh, heading);
+                    }
                 },
                 (err) => {
                     indicator.className = "w-2 h-2 rounded-full bg-red-500";
@@ -661,14 +667,12 @@
         }
 
         // 重啟 GPS 時，強制回正地圖
-        // 為了讓使用者感覺「真的有重啟」，我們手動 reset 一次 timer
         const originalStartGPS = startGPS;
         startGPS = function() {
             isUserInteracting = false;
             lastUserInteractionTime = 0; // 立即觸發回正
             originalStartGPS();
             
-            // 如果地圖已載入，手動拉回一次 (避免等待第一次 GPS callback 的延遲)
             if (map && currentPos) {
                  const center = getOffsetCenter(currentPos.lat, currentPos.lng, 15.3);
                  map.setView(center, 15.3);
