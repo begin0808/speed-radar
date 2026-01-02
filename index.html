@@ -10,7 +10,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="penguin.png">
     
-    <title>小企鵝超速雷達 (GPS Safe Check)</title>
+    <title>小企鵝超速雷達 (Highway Logic)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -233,7 +233,7 @@
             CONE_ANGLE: 20, 
             OFFSET_PIXELS: 200,
             AUTO_CENTER_DELAY: 10000,
-            GPS_ACCURACY_THRESHOLD: 100 // GPS 精度門檻 (公尺)
+            GPS_ACCURACY_THRESHOLD: 100 
         };
         
         let map, userMarker, pathLine;
@@ -256,6 +256,8 @@
         };
         let lastUserInteractionTime = 0;
         let isUserInteracting = false;
+        // 彈出視窗計時器
+        let popupTimer = null;
 
         const BeepManager = {
             audioCtx: null,
@@ -376,6 +378,27 @@
             map.on('mouseup touchend dragend zoomend', () => {
                 isUserInteracting = false;
                 lastUserInteractionTime = Date.now();
+            });
+
+            // --- 新增：資訊視窗自動關閉功能 ---
+            map.on('popupopen', (e) => {
+                // 如果有舊的計時器，先清除
+                if (popupTimer) {
+                    clearTimeout(popupTimer);
+                    popupTimer = null;
+                }
+                // 設定 10 秒後自動關閉
+                popupTimer = setTimeout(() => {
+                    e.popup.removeFrom(map);
+                    popupTimer = null;
+                }, 10000);
+            });
+            // 當視窗被手動關閉時，也清除計時器，避免影響下一次操作
+            map.on('popupclose', () => {
+                if (popupTimer) {
+                    clearTimeout(popupTimer);
+                    popupTimer = null;
+                }
             });
 
             const carIcon = L.divIcon({
@@ -555,6 +578,22 @@
                             failReason = "不在扇形區";
                         }
                     }
+                    
+                    // --- 國道/快速道路 特殊過濾 (解決平面道路誤報) ---
+                    // 如果相機是國道 (地址含 "國道" 或 "快速道路")
+                    // 但使用者的當前路名 "不含" 國道/快速道路
+                    // 則視為在平面道路上，即使角度/距離符合，也強制忽略。
+                    if (isThreat && (cam.address.includes("國道") || cam.address.includes("快速道路"))) {
+                         if (currentRoadName && currentRoadName !== "未知道路") {
+                             // 正規化以防萬一 (國道一號 -> 國道1號)
+                             const normUserRoad = normalizeRoadName(currentRoadName);
+                             if (!normUserRoad.includes("國道") && !normUserRoad.includes("快速道路")) {
+                                 isThreat = false;
+                                 failReason = "非行駛於國道";
+                             }
+                         }
+                    }
+
                 } 
                 else {
                     if (currentRoadName && currentRoadName !== "未知道路" && cam.address) {
@@ -599,6 +638,7 @@
         }
 
         function startGPS() {
+            // 如果正在模擬，先停止
             if (isSimulating) { 
                 clearInterval(simInterval); 
                 isSimulating = false; 
