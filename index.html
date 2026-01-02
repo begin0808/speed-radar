@@ -8,10 +8,9 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="manifest.json">
-    <!-- 更新 iOS 圖示為本地檔案 -->
     <link rel="apple-touch-icon" href="penguin.png">
     
-    <title>小企鵝超速雷達</title>
+    <title>小企鵝超速雷達 (UX Update)</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -231,8 +230,9 @@
             RESET_DIST: 600, 
             MIN_SPEED_ALERT: 20, 
             HEADING_TOLERANCE: 45, 
-            CONE_ANGLE: 30,
-            OFFSET_PIXELS: 200 
+            CONE_ANGLE: 20, // 已縮小為 20 度
+            OFFSET_PIXELS: 200,
+            AUTO_CENTER_DELAY: 10000 // 10秒自動回正
         };
         
         let map, userMarker, pathLine;
@@ -253,6 +253,8 @@
             warned200: false, 
             flashEndTime: 0  
         };
+        let lastUserInteractionTime = 0;
+        let isUserInteracting = false;
 
         const BeepManager = {
             audioCtx: null,
@@ -366,6 +368,15 @@
                 else mapDiv.classList.add('mode-street');
             });
 
+            // 監聽地圖互動，實現延遲回正
+            map.on('mousedown touchstart dragstart zoomstart', () => {
+                isUserInteracting = true;
+            });
+            map.on('mouseup touchend dragend zoomend', () => {
+                isUserInteracting = false;
+                lastUserInteractionTime = Date.now();
+            });
+
             const carIcon = L.divIcon({
                 className: 'custom-car',
                 html: `<div style="background:#3B82F6; width:24px; height:24px; border-radius:50%; border:3px solid white; box-shadow:0 0 15px #3B82F6;"></div>`,
@@ -373,10 +384,8 @@
             });
             userMarker = L.marker([currentPos.lat, currentPos.lng], {icon: carIcon, zIndexOffset: 1000}).addTo(map);
 
-            map.on('click', (e) => { 
-                if(!watchId) startSimulation(e.latlng); 
-                else alert("GPS 運行中。請先點擊右側「🚗 模擬行駛」按鈕切換模式。");
-            });
+            // 移除地圖點擊的模擬行駛功能 (避免干擾)
+            // map.on('click', (e) => { ... });
         }
 
         function getOffsetCenter(lat, lng, zoom) {
@@ -592,6 +601,7 @@
         }
 
         function startGPS() {
+            // 如果正在模擬，先停止
             if (isSimulating) { 
                 clearInterval(simInterval); 
                 isSimulating = false; 
@@ -619,9 +629,11 @@
                     
                     userMarker.setLatLng([latitude, longitude]);
                     
-                    // 修正：使用 offset center
-                    const center = getOffsetCenter(latitude, longitude, 15.3);
-                    map.setView(center, 15.3); 
+                    // --- 地圖自動回正邏輯 (10秒閒置檢測) ---
+                    if (!isUserInteracting && (Date.now() - lastUserInteractionTime > CONFIG.AUTO_CENTER_DELAY)) {
+                        const center = getOffsetCenter(latitude, longitude, 15.3);
+                        map.setView(center, 15.3); 
+                    }
                     
                     const kmh = speed ? Math.round(speed * 3.6) : 0;
                     
@@ -646,6 +658,21 @@
                 }, 
                 { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
             );
+        }
+
+        // 重啟 GPS 時，強制回正地圖
+        // 為了讓使用者感覺「真的有重啟」，我們手動 reset 一次 timer
+        const originalStartGPS = startGPS;
+        startGPS = function() {
+            isUserInteracting = false;
+            lastUserInteractionTime = 0; // 立即觸發回正
+            originalStartGPS();
+            
+            // 如果地圖已載入，手動拉回一次 (避免等待第一次 GPS callback 的延遲)
+            if (map && currentPos) {
+                 const center = getOffsetCenter(currentPos.lat, currentPos.lng, 15.3);
+                 map.setView(center, 15.3);
+            }
         }
 
         function toggleSimulation() {
@@ -794,10 +821,9 @@
             if (audioEnabled) {
                 btn.innerText = "🔊 語音開啟";
                 speak("語音已開啟");
-                BeepManager.init();
             } else {
                 btn.innerText = "🔇 語音關閉";
-                BeepManager.stop();
+                window.speechSynthesis.cancel();
             }
         }
         
