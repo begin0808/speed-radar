@@ -639,8 +639,8 @@
         const interactedCameras = new Map(); // Key: camera.id, Value: { maxStage: 0, lastSeen: timestamp }
 
         function checkProximity(lat, lng, speed = 0, heading = null) {
-            // Optimization: Throttling Road Name API
-            // fetchRoadName(lat, lng); 
+            // Fix: Enable API (Throttled inside function)
+            fetchRoadName(lat, lng);
 
             const candidates = getNearbyCameras(lat, lng);
             if (candidates.length === 0) return;
@@ -668,40 +668,14 @@
                 let isThreat = true;
                 let failReason = "";
 
-                const hasDirectionData = typeof cam.direction !== 'undefined';
-                // Only use heading if speed is sufficient to trust GPS heading (>5km/h)
-                const hasHeadingData = speed > 5 && heading !== null;
-
-                if (hasDirectionData && hasHeadingData) {
-                    // 1. Strict Heading Check (Filter out cross-traffic)
-                    let headingDiff = Math.abs(heading - cam.direction);
-                    if (headingDiff > 180) headingDiff = 360 - headingDiff;
-
-                    if (headingDiff > STRICT_HEADING_TOLERANCE) {
+                // --- NEW LOGIC: Split by Speed (Strict Static Filter) ---
+                if (speed < 10) {
+                    // [Strict Mode] Stationary or Low Speed (< 10km/h)
+                    // Must have valid road name AND match address
+                    if (!currentRoadName || currentRoadName === "未知道路" || currentRoadName === "偵測中") {
                         isThreat = false;
-                        failReason = `行駛方向不符 (差 ${Math.round(headingDiff)}°)`;
-                    }
-
-                    // 2. Cone Check
-                    if (isThreat) {
-                        const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
-                        const expectedUpstreamBearing = (cam.direction + 180) % 360;
-                        let positionDiff = Math.abs(bearingCamToCar - expectedUpstreamBearing);
-                        if (positionDiff > 180) positionDiff = 360 - positionDiff;
-
-                        if (positionDiff > CHECK_ANGLE) {
-                            // Dynamic Angle: If very close (<50m), allow wider angle (60)
-                            const threshold = d < 50 ? 60 : CHECK_ANGLE;
-                            if (positionDiff > threshold) {
-                                isThreat = false;
-                                failReason = "不在扇形區";
-                            }
-                        }
-                    }
-                }
-                else {
-                    // Fallback: Road Name Check
-                    if (currentRoadName && currentRoadName !== "未知道路" && cam.address) {
+                        failReason = "靜止:路名未定";
+                    } else if (cam.address) {
                         const normUserRoad = normalizeRoadName(currentRoadName);
                         let userRoadBase = normUserRoad.replace(/(\d+|[一二三四五六七八九十]+)段.*/, '');
                         userRoadBase = userRoadBase.replace(/(巷|弄|號).*/, '').trim();
@@ -709,7 +683,50 @@
 
                         if (userRoadBase.length > 1 && !camAddressClean.includes(userRoadBase)) {
                             isThreat = false;
-                            failReason = "路名不符";
+                            failReason = "靜止:路名不符";
+                        }
+                    }
+                } else {
+                    // [Moving Mode] Speed >= 10 km/h
+                    const hasDirectionData = typeof cam.direction !== 'undefined';
+                    const hasHeadingData = heading !== null; // GPS usually has heading if speed > 5
+
+                    if (hasDirectionData && hasHeadingData) {
+                        // 1. Heading Check
+                        let headingDiff = Math.abs(heading - cam.direction);
+                        if (headingDiff > 180) headingDiff = 360 - headingDiff;
+
+                        if (headingDiff > STRICT_HEADING_TOLERANCE) {
+                            isThreat = false;
+                            failReason = `方向不符(${Math.round(headingDiff)}°)`;
+                        }
+
+                        // 2. Cone Check
+                        if (isThreat) {
+                            const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
+                            const expectedUpstreamBearing = (cam.direction + 180) % 360;
+                            let positionDiff = Math.abs(bearingCamToCar - expectedUpstreamBearing);
+                            if (positionDiff > 180) positionDiff = 360 - positionDiff;
+
+                            const threshold = d < 50 ? 60 : CHECK_ANGLE;
+                            if (positionDiff > threshold) {
+                                isThreat = false;
+                                failReason = "不在扇形區";
+                            }
+                        }
+                    }
+                    else {
+                        // Fallback: Weak Road Name Check (only filters if definitely mismatch)
+                        if (currentRoadName && currentRoadName !== "未知道路" && cam.address) {
+                            const normUserRoad = normalizeRoadName(currentRoadName);
+                            let userRoadBase = normUserRoad.replace(/(\d+|[一二三四五六七八九十]+)段.*/, '');
+                            userRoadBase = userRoadBase.replace(/(巷|弄|號).*/, '').trim();
+                            const camAddressClean = cam.address.replace(/[-_/\s]/g, '');
+
+                            if (userRoadBase.length > 1 && !camAddressClean.includes(userRoadBase)) {
+                                isThreat = false;
+                                failReason = "路名不符";
+                            }
                         }
                     }
                 }
@@ -894,11 +911,12 @@
             document.getElementById('speed-display').innerText = speed;
             const elDist = document.getElementById('distance-display');
             const elMsgBox = document.getElementById('alert-message-box');
+            const alertOverlay = document.getElementById('alert-overlay');
 
             // Clear alerts if far away or no camera
             if (dist > 2000 || !cam) {
                 elDist.innerText = "--";
-                document.getElementById('alert-overlay').style.display = 'none';
+                alertOverlay.style.display = 'none';
                 elMsgBox.classList.add('hidden');
                 BeepManager.stop(); // Stop sound
                 return;
@@ -908,23 +926,26 @@
             document.getElementById('limit-val').innerText = cam.limit;
 
             // --- UI 狀態依據距離切換 ---
+            // Visual Overlay Logic: Only flash RED if speed > 20km/h
+            const showRedFlash = (speed > 20);
+
             if (dist <= CONFIG.PASS_DIST) {
                 // Stage 3: 通過 (<100m) - 紅色 + 音效
-                document.getElementById('alert-overlay').style.display = 'block';
+                alertOverlay.style.display = showRedFlash ? 'block' : 'none';
                 elMsgBox.classList.remove('hidden');
                 elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
             } else if (dist <= CONFIG.ALERT_DIST) {
                 // Stage 2: 緊急 (<200m) - 紅色 + 靜音
-                document.getElementById('alert-overlay').style.display = 'block';
+                alertOverlay.style.display = showRedFlash ? 'block' : 'none';
                 elMsgBox.classList.remove('hidden');
                 elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
             } else if (dist <= CONFIG.WARN_DIST) {
                 // Stage 1: 預警 (<500m) - 黃色
-                document.getElementById('alert-overlay').style.display = 'none';
+                alertOverlay.style.display = 'none'; // Yellow never red flashes
                 elMsgBox.classList.remove('hidden');
                 elMsgBox.innerHTML = `<span class="text-lg font-bold text-yellow-300">🔔 前方測速</span>`;
             } else {
-                document.getElementById('alert-overlay').style.display = 'none';
+                alertOverlay.style.display = 'none';
                 elMsgBox.classList.add('hidden');
             }
         }
