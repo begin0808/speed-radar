@@ -478,12 +478,73 @@
 
         async function loadCameras() {
             const statusTag = document.getElementById('db-status');
+            let tainanData = [];
+
             try {
-                const response = await fetch(DATA_URL);
-                if (!response.ok) throw new Error("JSON fetch failed");
-                cameras = await response.json();
-                statusTag.innerText = `✅ 已載入: ${cameras.length} 筆資料 (Static)`;
-                statusTag.classList.replace('bg-yellow-700', 'bg-green-700');
+                // Fetch Local Data
+                const resLocal = await fetch(DATA_URL).then(r => r.ok ? r.json() : []);
+                cameras = resLocal;
+
+                // Fetch Tainan Gov Data (Secondary Source)
+                try {
+                    const resTainan = await fetch('tainan_cameras.json');
+                    if (resTainan.ok) {
+                        const rawTainanData = await resTainan.json();
+
+                        // Parse Function for Chinese Direction
+                        const parseChiDirection = (dirText) => {
+                            if (!dirText) return undefined;
+                            const t = dirText;
+                            if (t.includes('北') && !t.includes('南') && !t.includes('東') && !t.includes('西')) return 0;
+                            if (t.includes('東北')) return 45;
+                            if (t.includes('東') && !t.includes('西') && !t.includes('北') && !t.includes('南')) return 90;
+                            if (t.includes('東南')) return 135;
+                            if (t.includes('南') && !t.includes('北') && !t.includes('東') && !t.includes('西')) return 180;
+                            if (t.includes('西南')) return 225;
+                            if (t.includes('西') && !t.includes('東') && !t.includes('北') && !t.includes('南')) return 270;
+                            if (t.includes('西北')) return 315;
+                            // 雙向, 多向 (Undefined means alert all)
+                            return undefined;
+                        };
+
+                        let addedCount = 0;
+                        rawTainanData.forEach(item => {
+                            const lat = parseFloat(item.lat);
+                            const lng = parseFloat(item.lng);
+                            if (isNaN(lat) || isNaN(lng)) return;
+
+                            // Dedup 50m
+                            const isDuplicate = cameras.some(existingCam => {
+                                return getDistance(lat, lng, existingCam.lat, existingCam.lng) < 50;
+                            });
+
+                            // Parse Speed Limit (Handle "50" or "快車道60...")
+                            let limitVal = 50;
+                            const limitStr = String(item.speed_limit);
+                            const match = limitStr.match(/(\d+)/);
+                            if (match) {
+                                limitVal = parseInt(match[0], 10);
+                            }
+
+                            if (!isDuplicate) {
+                                cameras.push({
+                                    lat: lat,
+                                    lng: lng,
+                                    limit: limitVal,
+                                    direction: parseChiDirection(item.direction),
+                                    direct: item.direction || '雙向',
+                                    address: item.google_formatted_address || (item.district + item.location),
+                                    sourceType: 'tainan_extra'
+                                });
+                                addedCount++;
+                            }
+                        });
+
+                        statusTag.innerText = `✅ 已載入: ${cameras.length} (含台南新增 ${addedCount})`;
+                        statusTag.classList.replace('bg-yellow-700', 'bg-green-700');
+                    }
+                } catch (e) { console.warn("Tainan data fetch failed", e); }
+
             } catch (e) {
                 console.warn("Using mock data:", e);
                 cameras = MOCK_DATA;
@@ -556,9 +617,17 @@
                     }).addTo(map);
                 }
 
-                // Feature A: Purple Icons for Highways / High Speed
+                // Default: Red
                 let iconBgClass = "bg-red-600";
-                if (cam.address && (cam.address.includes("國道") || cam.address.includes("快速") || cam.limit >= 80)) {
+
+                // Logic: 
+                // 1. Tainan Extra -> YELLOW
+                // 2. Highway -> PURPLE
+                // 3. Normal -> RED
+
+                if (cam.sourceType === 'tainan_extra') {
+                    iconBgClass = "bg-yellow-400"; // Goose Yellow for Government Data
+                } else if (cam.address && (cam.address.includes("國道") || cam.address.includes("快速") || cam.limit >= 80)) {
                     iconBgClass = "bg-purple-600";
                 }
 
@@ -582,6 +651,7 @@
                 const addressText = cam.address ? cam.address : "地址未知";
                 const regionText = cam.region ? `[${cam.region}] ` : "";
                 const rawDirectText = cam.direct || "";
+                const sourceText = cam.sourceType === 'tainan_extra' ? '<br><span class="text-xs text-yellow-400 font-bold">(台南市府新增)</span>' : '';
 
                 L.marker([cam.lat, cam.lng], { icon: icon })
                     .bindPopup(`
@@ -590,7 +660,7 @@
                                 ${cam.limit} <span class="text-sm text-white">km/h</span>
                                 ${rawDirectText ? `<span class="text-base text-yellow-300 ml-2 font-normal">(${rawDirectText})</span>` : ''}
                             </div>
-                            <div class="text-sm text-gray-300 border-t border-gray-600 pt-1 mt-1">${regionText}${addressText}</div>
+                            <div class="text-sm text-gray-300 border-t border-gray-600 pt-1 mt-1">${regionText}${addressText}${sourceText}</div>
                         </div>
                     `)
                     .addTo(map);
