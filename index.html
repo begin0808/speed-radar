@@ -599,7 +599,8 @@
 
         async function fetchRoadName(lat, lng) {
             const now = Date.now();
-            if (now - lastRoadFetchTime < 5000 && lastRoadFetchPos && getDistance(lat, lng, lastRoadFetchPos.lat, lastRoadFetchPos.lng) < 30) {
+            // Refinement 3: Fast Update (3 seconds)
+            if (now - lastRoadFetchTime < 3000 && lastRoadFetchPos && getDistance(lat, lng, lastRoadFetchPos.lat, lastRoadFetchPos.lng) < 30) {
                 return;
             }
             lastRoadFetchTime = now;
@@ -636,10 +637,10 @@
         }
 
         // State Machine for Alerts
-        const interactedCameras = new Map(); // Key: camera.id, Value: { maxStage: 0, lastSeen: timestamp }
+        // Value: { maxStage: 0, lastSeen: timestamp, flashStartTime: 0 }
+        const interactedCameras = new Map();
 
         function checkProximity(lat, lng, speed = 0, heading = null) {
-            // Fix: Enable API (Throttled inside function)
             fetchRoadName(lat, lng);
 
             const candidates = getNearbyCameras(lat, lng);
@@ -668,31 +669,33 @@
                 let isThreat = true;
                 let failReason = "";
 
-                // --- NEW LOGIC: Split by Speed (Strict Static Filter) ---
-                if (speed < 10) {
-                    // [Strict Mode] Stationary or Low Speed (< 10km/h)
-                    // Must have valid road name AND match address
-                    if (!currentRoadName || currentRoadName === "未知道路" || currentRoadName === "偵測中") {
-                        isThreat = false;
-                        failReason = "靜止:路名未定";
-                    } else if (cam.address) {
-                        const normUserRoad = normalizeRoadName(currentRoadName);
-                        let userRoadBase = normUserRoad.replace(/(\d+|[一二三四五六七八九十]+)段.*/, '');
-                        userRoadBase = userRoadBase.replace(/(巷|弄|號).*/, '').trim();
-                        const camAddressClean = cam.address.replace(/[-_/\s]/g, '');
+                // === STRICT FILTERING (Refinement Round 3) ===
 
-                        if (userRoadBase.length > 1 && !camAddressClean.includes(userRoadBase)) {
-                            isThreat = false;
-                            failReason = "靜止:路名不符";
-                        }
+                // 1. Road Name Check (Common for BOTH Static and Moving)
+                // If road name is known, it MUST match. 
+                // If unknown/detecting, it's considered a MISMATCH (Strict by user request)
+                if (!currentRoadName || currentRoadName === "未知道路" || currentRoadName === "偵測中") {
+                    isThreat = false;
+                    failReason = "路名未定";
+                } else if (cam.address) {
+                    const normUserRoad = normalizeRoadName(currentRoadName);
+                    let userRoadBase = normUserRoad.replace(/(\d+|[一二三四五六七八九十]+)段.*/, '');
+                    userRoadBase = userRoadBase.replace(/(巷|弄|號).*/, '').trim();
+                    const camAddressClean = cam.address.replace(/[-_/\s]/g, '');
+
+                    if (userRoadBase.length > 1 && !camAddressClean.includes(userRoadBase)) {
+                        isThreat = false;
+                        failReason = "路名不符";
                     }
-                } else {
-                    // [Moving Mode] Speed >= 10 km/h
+                }
+
+                // 2. Extra Checks for Moving Mode
+                if (isThreat && speed >= 10) {
                     const hasDirectionData = typeof cam.direction !== 'undefined';
-                    const hasHeadingData = heading !== null; // GPS usually has heading if speed > 5
+                    const hasHeadingData = heading !== null;
 
                     if (hasDirectionData && hasHeadingData) {
-                        // 1. Heading Check
+                        // Heading Check
                         let headingDiff = Math.abs(heading - cam.direction);
                         if (headingDiff > 180) headingDiff = 360 - headingDiff;
 
@@ -701,7 +704,7 @@
                             failReason = `方向不符(${Math.round(headingDiff)}°)`;
                         }
 
-                        // 2. Cone Check
+                        // Cone Check
                         if (isThreat) {
                             const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
                             const expectedUpstreamBearing = (cam.direction + 180) % 360;
@@ -712,20 +715,6 @@
                             if (positionDiff > threshold) {
                                 isThreat = false;
                                 failReason = "不在扇形區";
-                            }
-                        }
-                    }
-                    else {
-                        // Fallback: Weak Road Name Check (only filters if definitely mismatch)
-                        if (currentRoadName && currentRoadName !== "未知道路" && cam.address) {
-                            const normUserRoad = normalizeRoadName(currentRoadName);
-                            let userRoadBase = normUserRoad.replace(/(\d+|[一二三四五六七八九十]+)段.*/, '');
-                            userRoadBase = userRoadBase.replace(/(巷|弄|號).*/, '').trim();
-                            const camAddressClean = cam.address.replace(/[-_/\s]/g, '');
-
-                            if (userRoadBase.length > 1 && !camAddressClean.includes(userRoadBase)) {
-                                isThreat = false;
-                                failReason = "路名不符";
                             }
                         }
                     }
@@ -745,7 +734,9 @@
 
             const debugEl = document.getElementById('detection-debug-info');
             if (nearestCam) {
-                debugEl.innerText = `鎖定: ${nearestCam.limit}k (${Math.round(minDist)}m)`;
+                const state = interactedCameras.get(nearestCam.id);
+                const flashInfo = (state && state.flashStartTime > 0) ? " (已閃)" : "";
+                debugEl.innerText = `鎖定: ${nearestCam.limit}k (${Math.round(minDist)}m)${flashInfo}`;
                 debugEl.className = "text-[10px] text-green-400 mt-1 truncate";
             } else if (absNearest && absMinDist < 800) {
                 debugEl.innerText = `最近 ${Math.round(absMinDist)}m - ${debugMsg}`;
@@ -925,27 +916,48 @@
             elDist.innerText = Math.round(dist);
             document.getElementById('limit-val').innerText = cam.limit;
 
-            // --- UI 狀態依據距離切換 ---
-            // Visual Overlay Logic: Only flash RED if speed > 20km/h
-            const showRedFlash = (speed > 20);
+            // --- 3-Second Flash Logic (User Requirement) ---
+            let state = interactedCameras.get(cam.id) || { maxStage: 0, lastSeen: 0, flashStartTime: 0 };
 
-            if (dist <= CONFIG.PASS_DIST) {
-                // Stage 3: 通過 (<100m) - 紅色 + 音效
-                alertOverlay.style.display = showRedFlash ? 'block' : 'none';
-                elMsgBox.classList.remove('hidden');
-                elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
-            } else if (dist <= CONFIG.ALERT_DIST) {
-                // Stage 2: 緊急 (<200m) - 紅色 + 靜音
-                alertOverlay.style.display = showRedFlash ? 'block' : 'none';
-                elMsgBox.classList.remove('hidden');
-                elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
-            } else if (dist <= CONFIG.WARN_DIST) {
-                // Stage 1: 預警 (<500m) - 黃色
-                alertOverlay.style.display = 'none'; // Yellow never red flashes
-                elMsgBox.classList.remove('hidden');
-                elMsgBox.innerHTML = `<span class="text-lg font-bold text-yellow-300">🔔 前方測速</span>`;
+            // Determine if we SHOULD show overlay (Red Zone < 200m)
+            const isInRedZone = (dist <= CONFIG.ALERT_DIST);
+            let shouldShowOverlay = false;
+            let shouldFlash = false;
+
+            if (isInRedZone) {
+                // Initialize flash timer if entering red zone for first time
+                if (!state.flashStartTime || state.flashStartTime === 0) {
+                    state.flashStartTime = Date.now();
+                    interactedCameras.set(cam.id, state);
+                }
+
+                // Check 3s limit
+                const elapsed = Date.now() - state.flashStartTime;
+                if (elapsed < 3000) {
+                    shouldShowOverlay = true;
+                    // Flash only if moving > 20 (moving mode), otherwise just solid red (static mode)
+                    if (speed > 20) shouldFlash = true;
+                }
+            }
+
+            // Apply UI
+            if (shouldShowOverlay) {
+                alertOverlay.style.display = 'block';
+                alertOverlay.style.animation = shouldFlash ? 'pulse 0.8s infinite' : 'none';
+                alertOverlay.style.borderColor = 'rgba(220, 38, 38, 1)'; // Solid red border
             } else {
                 alertOverlay.style.display = 'none';
+            }
+
+            // Msg Box logic (Yellow/Red)
+            if (dist <= CONFIG.WARN_DIST) {
+                elMsgBox.classList.remove('hidden');
+                if (dist <= CONFIG.ALERT_DIST) {
+                    elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
+                } else {
+                    elMsgBox.innerHTML = `<span class="text-lg font-bold text-yellow-300">🔔 前方測速</span>`;
+                }
+            } else {
                 elMsgBox.classList.add('hidden');
             }
         }
@@ -953,13 +965,12 @@
         function handleVoiceAlert(dist, cam, speed) {
             if (!audioEnabled || !cam) return;
 
-            // Check interaction state (One-time alert)
-            let state = interactedCameras.get(cam.id) || { maxStage: 0, lastSeen: 0 };
+            let state = interactedCameras.get(cam.id) || { maxStage: 0, lastSeen: 0, flashStartTime: 0 };
 
-            // Allow reset if far away
+            // Reset if far away
             if (dist > CONFIG.RESET_DIST) {
                 interactedCameras.delete(cam.id);
-                state = { maxStage: 0, lastSeen: 0 };
+                state = { maxStage: 0, lastSeen: 0, flashStartTime: 0 };
             }
 
             // Stage 1: 500m 預警 (Yellow)
