@@ -651,8 +651,8 @@
                 let iconBgClass = "bg-red-600";
 
                 if (isTainan) {
-                    // 2. Yellow -> Orange-Red
-                    iconBgClass = "bg-orange-600";
+                    // Refinement 3: Yellow -> Yellow-Green (Lime) & No Arrow (Ensured)
+                    iconBgClass = "bg-lime-500";
                 } else if (cam.address && (cam.address.includes("國道") || cam.address.includes("快速") || cam.limit >= 80)) {
                     iconBgClass = "bg-purple-600";
                 }
