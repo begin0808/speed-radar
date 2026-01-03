@@ -630,6 +630,8 @@
 
             cameras.forEach(cam => {
                 let arrowHtml = '';
+                const isTainan = (cam.sourceType === 'tainan_extra');
+
                 // User Request: Remove Yellow Triangle Arrow from ALL cameras
                 // if (!isTainan && typeof cam.direction !== 'undefined') {
                 //    arrowHtml = `<div class="camera-direction-arrow" style="transform: rotate(${cam.direction}deg);"></div>`;
