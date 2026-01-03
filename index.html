@@ -622,8 +622,9 @@
             // Zoom >= 16: 32px
 
             let sizePx = 32;
-            if (currentZoom < 13) sizePx = 16;
-            else if (currentZoom < 15) sizePx = 24;
+            if (currentZoom < 12) sizePx = 8;
+            else if (currentZoom < 14) sizePx = 12;
+            else if (currentZoom < 16) sizePx = 20;
 
             // Update CSS for dynamic sizing if needed, or just set iconSize here.
             // Setting iconSize directly is cleaner.
