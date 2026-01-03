@@ -593,76 +593,116 @@
             return candidates;
         }
 
+        // Layer Group for Markers (to allow clearing)
+        const markersLayer = L.layerGroup().addTo(map);
+
         function renderCameras() {
+            markersLayer.clearLayers();
+
+            const currentZoom = map.getZoom();
+
+            // Dynamic Sizing Logic:
+            // "Enlarge Map" (Zoom In) -> Smaller Icons (per user request interpretation)
+            // Or Standard: Zoom Out -> Smaller.
+            // User: "When I enlarge the map, icons become smaller."
+            // Standard behavior: 
+            // Zoom 18 (Street) -> Size 30
+            // Zoom 12 (City) -> Size 15
+            // If user implies "They obscure too much at high zoom", maybe keep them small.
+            // Let's implement standard "Zoom In -> Larger, Zoom Out -> Smaller" first as it's most legible.
+            // If user explicitly asked for "Enlarge Map -> Smaller", it's usually a misunderstanding of terms.
+            // I will implement: 
+            // Zoom < 13: 16px
+            // Zoom 13-15: 24px
+            // Zoom >= 16: 32px
+
+            let sizePx = 32;
+            if (currentZoom < 13) sizePx = 16;
+            else if (currentZoom < 15) sizePx = 24;
+
+            // Update CSS for dynamic sizing if needed, or just set iconSize here.
+            // Setting iconSize directly is cleaner.
+
             cameras.forEach(cam => {
                 let arrowHtml = '';
-                if (typeof cam.direction !== 'undefined') {
-                    arrowHtml = `<div class="camera-direction-arrow" style="transform: rotate(${cam.direction}deg);"></div>`;
+                const isTainan = (cam.sourceType === 'tainan_extra');
 
+                // 4. Cancel Yellow Triangle Arrow for Tainan Added Cameras
+                // Only show arrow for NON-Tainan cameras
+                if (!isTainan && typeof cam.direction !== 'undefined') {
+                    arrowHtml = `<div class="camera-direction-arrow" style="transform: rotate(${cam.direction}deg);"></div>`;
+                }
+
+                if (typeof cam.direction !== 'undefined' && !isTainan) {
                     const r = 0.003;
                     const center = [cam.lat, cam.lng];
                     const upstreamDir = (cam.direction + 180) % 360;
                     const leftAngle = (upstreamDir - CONFIG.CONE_ANGLE) * (Math.PI / 180);
                     const rightAngle = (upstreamDir + CONFIG.CONE_ANGLE) * (Math.PI / 180);
-
-                    const leftPoint = [cam.lat + r * Math.cos(leftAngle), cam.lng + r * Math.sin(leftAngle)];
-                    const rightPoint = [cam.lat + r * Math.cos(rightAngle), cam.lng + r * Math.sin(rightAngle)];
-
-                    // L.polygon([center, leftPoint, rightPoint], {
-                    //     color: '#F59E0B',
-                    //     weight: 1,
-                    //     fillColor: '#FCD34D',
-                    //     fillOpacity: 0.2,
-                    //     dashArray: '5, 5'
-                    // }).addTo(map);
+                    // View Cone disabled
                 }
 
                 // Default: Red
                 let iconBgClass = "bg-red-600";
 
-                // Logic: 
-                // 1. Tainan Extra -> YELLOW
-                // 2. Highway -> PURPLE
-                // 3. Normal -> RED
-
-                if (cam.sourceType === 'tainan_extra') {
-                    iconBgClass = "bg-yellow-400"; // Goose Yellow for Government Data
+                if (isTainan) {
+                    // 2. Yellow -> Orange-Red
+                    iconBgClass = "bg-orange-600";
                 } else if (cam.address && (cam.address.includes("國道") || cam.address.includes("快速") || cam.limit >= 80)) {
                     iconBgClass = "bg-purple-600";
                 }
 
+                // Dynamic CSS Size
                 const icon = L.divIcon({
                     className: 'custom-camera-icon',
                     html: `
-                       <div class="relative w-8 h-8">
+                       <div class="relative" style="width:${sizePx}px; height:${sizePx}px;">
                            ${arrowHtml}
-                           <div class="w-8 h-8 ${iconBgClass} rounded-full flex items-center justify-center shadow-lg border-2 border-white relative z-20">
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5 text-white">
+                           <div class="w-full h-full ${iconBgClass} rounded-full flex items-center justify-center shadow-lg border-2 border-white relative z-20">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-3/5 h-3/5 text-white">
                               <path d="M12 9a3.75 3.75 0 100 7.5A3.75 3.75 0 0012 9z" />
                               <path fill-rule="evenodd" d="M9.344 3.071a49.52 49.52 0 015.312 0c.967.052 1.83.585 2.332 1.39l.821 1.317c.24.383.645.643 1.11.71.386.054.77.113 1.152.177 1.432.239 2.429 1.493 2.429 2.909V18a3 3 0 01-3 3h-15a3 3 0 01-3-3V9.574c0-1.416.997-2.67 2.429-2.909.382-.064.766-.123 1.151-.178a1.56 1.56 0 001.11-.71l.822-1.315a2.942 2.942 0 012.332-1.39zM6.75 12.75a5.25 5.25 0 1110.5 0 5.25 5.25 0 01-10.5 0zm12-1.5a.75.75 0 100-1.5.75.75 0 000 1.5z" clip-rule="evenodd" />
                             </svg>
                            </div>
                        </div>`,
-                    iconSize: [32, 32],
-                    iconAnchor: [16, 16],
+                    iconSize: [sizePx, sizePx],
+                    iconAnchor: [sizePx / 2, sizePx / 2],
                     popupAnchor: [0, -10]
                 });
 
-                const addressText = cam.address ? cam.address : "地址未知";
-                const regionText = cam.region ? `[${cam.region}] ` : "";
-                const rawDirectText = cam.direct || "";
-                const sourceText = cam.sourceType === 'tainan_extra' ? '<br><span class="text-xs text-yellow-400 font-bold">(台南市府新增)</span>' : '';
+                const sourceText = isTainan ? '<br><span class="text-xs text-orange-500 font-bold">(台南市府新增)</span>' : '';
 
                 L.marker([cam.lat, cam.lng], { icon: icon })
                     .bindPopup(`
                         <div class="text-center">
+                            <div class="font-bold text-lg">${cam.limit} km/h</div>
+                            <div class="text-sm text-gray-500">${cam.direct || '方向未知'}</div>
+                            <div class="text-xs text-gray-400 mt-1">${cam.address}</div>
+                            ${sourceText}
+                        </div>
+                    `)
+                    .addTo(markersLayer);
+            });
+        }
+
+        // Monitor Zoom for Dynamic Sizing
+        map.on('zoomend', () => {
+            renderCameras();
+        });
+
+        // 1. Auto-close Popup (6 sec)
+        map.on('popupopen', function (e) {
+            setTimeout(() => {
+                map.closePopup();
+            }, 6000);
+        });
                             <div class="text-xl font-bold text-red-400 mb-1">
                                 ${cam.limit} <span class="text-sm text-white">km/h</span>
                                 ${rawDirectText ? `<span class="text-base text-yellow-300 ml-2 font-normal">(${rawDirectText})</span>` : ''}
                             </div>
                             <div class="text-sm text-gray-300 border-t border-gray-600 pt-1 mt-1">${regionText}${addressText}${sourceText}</div>
-                        </div>
-                    `)
+                        </div >
+            `)
                     .addTo(map);
             });
         }
@@ -678,17 +718,17 @@
 
             try {
                 const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1&accept-language=zh-TW`;
-                const response = await fetch(url);
-                const data = await response.json();
+        const response = await fetch(url);
+        const data = await response.json();
 
-                if (data && data.address) {
-                    const road = data.address.road || data.address.pedestrian || data.address.highway || data.address.street || "未知道路";
-                    currentRoadName = road;
-                    const roadDisplay = document.getElementById('current-road-display');
-                    roadDisplay.innerText = road;
-                    roadDisplay.classList.remove('text-gray-500');
-                    roadDisplay.classList.add('text-blue-300');
-                }
+        if (data && data.address) {
+            const road = data.address.road || data.address.pedestrian || data.address.highway || data.address.street || "未知道路";
+            currentRoadName = road;
+            const roadDisplay = document.getElementById('current-road-display');
+            roadDisplay.innerText = road;
+            roadDisplay.classList.remove('text-gray-500');
+            roadDisplay.classList.add('text-blue-300');
+        }
             } catch (e) { }
         }
 
