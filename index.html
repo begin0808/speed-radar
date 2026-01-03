@@ -394,6 +394,8 @@
             screen.style.opacity = '0';
             setTimeout(() => screen.remove(), 500);
 
+            init(); // Load Map and Cameras
+
             startGPS();
             requestWakeLock();
 
