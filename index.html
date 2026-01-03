@@ -513,9 +513,9 @@
                             const lng = parseFloat(item.lng);
                             if (isNaN(lat) || isNaN(lng)) return;
 
-                            // Dedup 50m
+                            // Dedup 100m (User Request)
                             const isDuplicate = cameras.some(existingCam => {
-                                return getDistance(lat, lng, existingCam.lat, existingCam.lng) < 50;
+                                return getDistance(lat, lng, existingCam.lat, existingCam.lng) < 100;
                             });
 
                             // Parse Speed Limit (Handle "50" or "快車道60...")
@@ -608,13 +608,13 @@
                     const leftPoint = [cam.lat + r * Math.cos(leftAngle), cam.lng + r * Math.sin(leftAngle)];
                     const rightPoint = [cam.lat + r * Math.cos(rightAngle), cam.lng + r * Math.sin(rightAngle)];
 
-                    L.polygon([center, leftPoint, rightPoint], {
-                        color: '#F59E0B',
-                        weight: 1,
-                        fillColor: '#FCD34D',
-                        fillOpacity: 0.2,
-                        dashArray: '5, 5'
-                    }).addTo(map);
+                    // L.polygon([center, leftPoint, rightPoint], {
+                    //     color: '#F59E0B',
+                    //     weight: 1,
+                    //     fillColor: '#FCD34D',
+                    //     fillOpacity: 0.2,
+                    //     dashArray: '5, 5'
+                    // }).addTo(map);
                 }
 
                 // Default: Red
