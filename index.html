@@ -468,8 +468,9 @@
 
             const carIcon = L.divIcon({
                 className: 'custom-car',
-                html: `<div style="background:#3B82F6; width:24px; height:24px; border-radius:50%; border:3px solid white; box-shadow:0 0 15px #3B82F6;"></div>`,
-                iconSize: [24, 24], iconAnchor: [12, 12]
+                // User Request: Shrink slightly (approx 24px). Reduced from 24px + 15px shadow to 22px + 10px shadow for tighter look.
+                html: `<div style="background:#3B82F6; width:22px; height:22px; border-radius:50%; border:3px solid white; box-shadow:0 0 10px #3B82F6;"></div>`,
+                iconSize: [22, 22], iconAnchor: [11, 11]
             });
             userMarker = L.marker([currentPos.lat, currentPos.lng], { icon: carIcon, zIndexOffset: 1000 }).addTo(map);
         }
