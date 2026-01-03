@@ -444,6 +444,9 @@
 
             L.control.layers({ "深色 (Dark)": darkLayer, "淺色 (Light)": lightLayer, "街道 (Street)": osmLayer }, null, { position: 'topright' }).addTo(map);
 
+            // Initialize markersLayer now that map exists
+            markersLayer = L.layerGroup().addTo(map);
+
             map.on('baselayerchange', function (e) {
                 const mapDiv = document.getElementById('map');
                 mapDiv.classList.remove('mode-dark', 'mode-light', 'mode-street');
@@ -593,8 +596,8 @@
             return candidates;
         }
 
-        // Layer Group for Markers (to allow clearing)
-        const markersLayer = L.layerGroup().addTo(map);
+        // Layer Group for Markers (Initialized in initMap or lazily)
+        let markersLayer;
 
         function renderCameras() {
             markersLayer.clearLayers();
@@ -696,16 +699,7 @@
                 map.closePopup();
             }, 6000);
         });
-                            <div class="text-xl font-bold text-red-400 mb-1">
-                                ${cam.limit} <span class="text-sm text-white">km/h</span>
-                                ${rawDirectText ? `<span class="text-base text-yellow-300 ml-2 font-normal">(${rawDirectText})</span>` : ''}
-                            </div>
-                            <div class="text-sm text-gray-300 border-t border-gray-600 pt-1 mt-1">${regionText}${addressText}${sourceText}</div>
-                        </div >
-            `)
-                    .addTo(map);
-            });
-        }
+
 
         async function fetchRoadName(lat, lng) {
             const now = Date.now();
@@ -718,17 +712,17 @@
 
             try {
                 const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1&accept-language=zh-TW`;
-        const response = await fetch(url);
-        const data = await response.json();
+                const response = await fetch(url);
+                const data = await response.json();
 
-        if (data && data.address) {
-            const road = data.address.road || data.address.pedestrian || data.address.highway || data.address.street || "未知道路";
-            currentRoadName = road;
-            const roadDisplay = document.getElementById('current-road-display');
-            roadDisplay.innerText = road;
-            roadDisplay.classList.remove('text-gray-500');
-            roadDisplay.classList.add('text-blue-300');
-        }
+                if (data && data.address) {
+                    const road = data.address.road || data.address.pedestrian || data.address.highway || data.address.street || "未知道路";
+                    currentRoadName = road;
+                    const roadDisplay = document.getElementById('current-road-display');
+                    roadDisplay.innerText = road;
+                    roadDisplay.classList.remove('text-gray-500');
+                    roadDisplay.classList.add('text-blue-300');
+                }
             } catch (e) { }
         }
 
