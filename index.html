@@ -307,17 +307,16 @@
         ];
 
         const CONFIG = {
-            WARN_DIST: 500,
-            ALERT_DIST: 200,
-            PASS_DIST: 100,
-            RESET_DIST: 600,
-            MIN_SPEED_ALERT: 20,
-            HEADING_TOLERANCE: 45,
-            CONE_ANGLE: 20,
             OFFSET_PIXELS: 200,
             AUTO_CENTER_DELAY: 10000,
-            GPS_ACCURACY_THRESHOLD: 100 // GPS 精度門檻 (公尺)
+            GPS_ACCURACY_THRESHOLD: 100, // GPS 精度門檻 (公尺)
+            // 預設參數 (實際值由動態計算決定)
+            BASE_CITY_WARN: 300,
+            BASE_HIGHWAY_WARN: 500
         };
+
+        const ROAD_CONTEXT = { CITY: 'CITY', HIGHWAY: 'HIGHWAY' };
+        const CONFIDENCE = { HIGH: 'HIGH', MEDIUM: 'MEDIUM', LOW: 'LOW' };
 
         let map, userMarker, pathLine;
         let cameras = [];
@@ -743,118 +742,235 @@
             return normalized;
         }
 
-        // State Machine for Alerts
-        // Value: { maxStage: 0, lastSeen: timestamp, flashStartTime: 0 }
-        const interactedCameras = new Map();
+        // --- V2 Logic Helpers ---
 
-        function checkProximity(lat, lng, speed = 0, heading = null) {
-            fetchRoadName(lat, lng);
+        function getRoadContext(roadName, cam) {
+            // 判定為 HIGHWAY 若路名包含特定關鍵字 或 速限 >= 80
+            if (cam.limit >= 80) return ROAD_CONTEXT.HIGHWAY;
+            if (roadName) {
+                const signs = ['國道', '快速', '高速', '高架'];
+                if (signs.some(s => roadName.includes(s))) return ROAD_CONTEXT.HIGHWAY;
+            }
+            return ROAD_CONTEXT.CITY;
+        }
 
-            const candidates = getNearbyCameras(lat, lng);
-            if (candidates.length === 0) return;
+        function getThresholds(speed, context) {
+            // 距離參數設定 (動態計算)
+            // 市區: 預警 = Max(300, v*3) 上限 500
+            // 高速: 預警 = Max(500, v*4) 上限 800
+            let warnDist = 300;
+            let alertDist = 0;
+            let passDist = 0;
+            let resetDist = 0;
 
-            let minDist = Infinity;
-            let nearestCam = null;
-            let debugMsg = "";
+            if (context === ROAD_CONTEXT.HIGHWAY) {
+                warnDist = Math.max(500, speed * 4);
+                if (warnDist > 800) warnDist = 800;
 
-            let absNearest = null;
-            let absMinDist = Infinity;
+                alertDist = warnDist * 0.45;
+                passDist = 120;
+                resetDist = warnDist + 200;
+            } else {
+                warnDist = Math.max(300, speed * 3);
+                if (warnDist > 500) warnDist = 500;
 
-            const CHECK_ANGLE = 40;
-            const STRICT_HEADING_TOLERANCE = 45;
+                alertDist = warnDist * 0.40;
+                passDist = 80;
+                resetDist = warnDist + 100;
+            }
 
-            for (let cam of candidates) {
-                const d = getDistance(lat, lng, cam.lat, cam.lng);
+            return { warnDist, alertDist, passDist, resetDist };
+        }
 
-                if (d < absMinDist) {
-                    absMinDist = d;
-                    absNearest = cam;
-                }
+        function getConfidenceLevel(cam, userRoadName, dist, heading, speed) {
+            // 1. High Confidence Check
+            // 路名已知 (非空、非未知) 且 比對成功
+            const isRoadKnown = (userRoadName && userRoadName !== "未知道路" && userRoadName !== "偵測中");
 
-                if (d > CONFIG.WARN_DIST) continue;
+            if (isRoadKnown) {
+                const normUserRoad = normalizeRoadName(userRoadName);
+                // 提取基底 (去除段巷弄號)
+                let userRoadBase = normUserRoad.replace(/(\d+|[一二三四五六七八九十]+)段.*/, '');
+                userRoadBase = userRoadBase.replace(/(巷|弄|號).*/, '').trim();
 
-                let isThreat = true;
-                let failReason = "";
+                // 比對 Cam Data (road_name 或 address)
+                // 只要任一欄位包含 userRoadBase (長度須 > 1)
+                if (userRoadBase.length > 1) {
+                    const camRoad = cam.road_name ? normalizeRoadName(cam.road_name) : "";
+                    const camAddr = cam.address ? normalizeRoadName(cam.address) : "";
 
-                // === STRICT FILTERING (Refinement Round 3) ===
-
-                // 1. Road Name Check (Common for BOTH Static and Moving)
-                // If road name is known, it MUST match. 
-                // If unknown/detecting, it's considered a MISMATCH (Strict by user request)
-                if (!currentRoadName || currentRoadName === "未知道路" || currentRoadName === "偵測中") {
-                    isThreat = false;
-                    failReason = "路名未定";
-                } else if (cam.address) {
-                    const normUserRoad = normalizeRoadName(currentRoadName);
-                    let userRoadBase = normUserRoad.replace(/(\d+|[一二三四五六七八九十]+)段.*/, '');
-                    userRoadBase = userRoadBase.replace(/(巷|弄|號).*/, '').trim();
-                    const camAddressClean = cam.address.replace(/[-_/\s]/g, '');
-
-                    if (userRoadBase.length > 1 && !camAddressClean.includes(userRoadBase)) {
-                        isThreat = false;
-                        failReason = "路名不符";
-                    }
-                }
-
-                // 2. Extra Checks for Moving Mode
-                if (isThreat && speed >= 10) {
-                    const hasDirectionData = typeof cam.direction !== 'undefined';
-                    const hasHeadingData = heading !== null;
-
-                    if (hasDirectionData && hasHeadingData) {
-                        // Heading Check
-                        let headingDiff = Math.abs(heading - cam.direction);
-                        if (headingDiff > 180) headingDiff = 360 - headingDiff;
-
-                        if (headingDiff > STRICT_HEADING_TOLERANCE) {
-                            isThreat = false;
-                            failReason = `方向不符(${Math.round(headingDiff)}°)`;
-                        }
-
-                        // Cone Check
-                        if (isThreat) {
-                            const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
-                            const expectedUpstreamBearing = (cam.direction + 180) % 360;
-                            let positionDiff = Math.abs(bearingCamToCar - expectedUpstreamBearing);
-                            if (positionDiff > 180) positionDiff = 360 - positionDiff;
-
-                            const threshold = d < 50 ? 60 : CHECK_ANGLE;
-                            if (positionDiff > threshold) {
-                                isThreat = false;
-                                failReason = "不在扇形區";
-                            }
-                        }
-                    }
-                }
-
-                if (cam === absNearest && !isThreat) {
-                    debugMsg = `忽略: ${failReason}`;
-                }
-
-                if (isThreat) {
-                    if (d < minDist) {
-                        minDist = d;
-                        nearestCam = cam;
+                    if (camRoad.includes(userRoadBase) || camAddr.includes(userRoadBase)) {
+                        return CONFIDENCE.HIGH;
                     }
                 }
             }
 
+            // 2. Medium Confidence Check
+            // 必須滿足幾何條件: 進入緊急範圍、角度 < 20、扇形內
+            // Low Speed (<10) skip heading check (Implicitly fits angle req if strictly ignoring it for moving only?)
+            // 這裡規則: "中信任...同時必須符合...車輛行進方向與測速照相機拍攝方向誤差不超過二十度"
+            // 若速度低無法判定方向 -> 無法滿足 "誤差不超過20" -> 除非有額外規定低速視為符合?
+            // User Rules: "當車速低於每小時十公里時，不進行方向判斷" -> 意即此時方向視為吻合? 假設是。
+
+            // 幾何檢查
+            const hasDirectionData = (typeof cam.direction !== 'undefined');
+            let geometryMatch = false;
+
+            if (hasDirectionData) {
+                let headingDiff = 0;
+                let positionDiff = 0;
+                const effectiveHeading = (speed < 10 || heading === null) ? cam.direction : heading; // 若低速/無heading，假定方向正確(或忽略)？
+                // 實作: 規則說 "車速低於10...不進行方向判斷"。 視為 Pass。
+
+                // 方向誤差
+                if (speed >= 10 && heading !== null) {
+                    headingDiff = Math.abs(heading - cam.direction);
+                    if (headingDiff > 180) headingDiff = 360 - headingDiff;
+                }
+
+                // 扇形位置 (Cam 在 Car 前方?) -> 實際上是 Car 在 Cam 的逆向方位角扇形內
+                // Cam Direction is "Capture Direction". Upstream is Dir + 180.
+                const bearingCamToCar = getBearing(cam.lat, cam.lng, currentPos.lat, currentPos.lng);
+                const expectedUpstreamBearing = (cam.direction + 180) % 360;
+                positionDiff = Math.abs(bearingCamToCar - expectedUpstreamBearing);
+                if (positionDiff > 180) positionDiff = 360 - positionDiff;
+
+                // 閾值 (Medium Trust strict requirements)
+                // 誤差 <= 20
+                // 扇形 <= 20
+                const isHeadingOk = (speed < 10) || (headingDiff <= 20);
+                const isPosOk = (positionDiff <= 20); // Medium rules usually strict: 20 deg
+
+                if (isHeadingOk && isPosOk) geometryMatch = true;
+
+            } else {
+                // 無方向資料的相機? 
+                // 通常視為全向，幾何符合。
+                geometryMatch = true;
+            }
+
+            // 距離由外部判定 (需在緊急距離內)，此函式只回傳等級? 
+            // 還是 checkProximity 判斷距離? 
+            // 依照 User Rules: "中信任等級...符合以下之一...但同時必須符合...進入緊急距離範圍內"
+            // 為了簡化，getConfidence不檢查距離，只檢查路名與幾何。checkProximity 結合距離降級。
+
+            // 下方 checkProximity 會再檢核距離。這裡先回傳幾何吻合度高的 Potential Medium.
+            if (geometryMatch) return CONFIDENCE.MEDIUM;
+
+            return CONFIDENCE.LOW;
+        }
+
+        // State Machine for Alerts
+        const interactedCameras = new Map();
+
+        function checkProximity(lat, lng, speed = 0, heading = null) {
+            fetchRoadName(lat, lng);
+            const candidates = getNearbyCameras(lat, lng);
+
+            let activeAlert = null; // { cam, dist, context, confidence, thresholds }
+            let minThreatDist = Infinity;
+
+            for (let cam of candidates) {
+                const dist = getDistance(lat, lng, cam.lat, cam.lng);
+
+                // 初步過濾 (最大可能預警距離 800m)
+                if (dist > 800) continue;
+
+                const context = getRoadContext(currentRoadName, cam);
+                const th = getThresholds(speed, context);
+
+                // 解除狀態判斷
+                if (dist > th.resetDist) {
+                    interactedCameras.delete(cam.id);
+                    continue;
+                }
+
+                // 計算信任等級
+                // 先算幾何
+                // Geometry Rules:
+                // Speed < 10: No heading check.
+                // Distance < 50: Fan 60 deg.
+                // Distance < 80: Ignore heading check (anti-jitter).
+                // Normal: Heading 45, Fan 20.
+
+                let isGeometryOk = true;
+                if (typeof cam.direction !== 'undefined') {
+                    const fanAngle = (dist < 50) ? 60 : 20; // 扇形角度
+
+                    // Position Check (Car in Fan)
+                    const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
+                    const expectedUpstream = (cam.direction + 180) % 360;
+                    let posDiff = Math.abs(bearingCamToCar - expectedUpstream);
+                    if (posDiff > 180) posDiff = 360 - posDiff;
+
+                    if (posDiff > fanAngle) isGeometryOk = false;
+
+                    // Heading Check (Car moving towards Cam)
+                    if (speed >= 10 && dist >= 80) { // <80 or <10 ignore
+                        let hDiff = Math.abs(heading - cam.direction);
+                        if (hDiff > 180) hDiff = 360 - hDiff;
+                        if (hDiff > 45) isGeometryOk = false;
+                    }
+                }
+
+                // 決定 Confidence
+                // 若 Low Confidence (Geometry Fail or Explicit Logic) -> Ignore
+                if (!isGeometryOk) {
+                    // 如果幾何都不符，直接 Low
+                    // 除了少數特例 (如路名完全吻合但GPS漂移)? 規則說 "不在扇形...忽略" -> Low
+                    interactedCameras.delete(cam.id);
+                    continue;
+                }
+
+                let confidence = getConfidenceLevel(cam, currentRoadName, dist, heading, speed);
+
+                // Medium Confidence 修正:
+                // User Rule: "中信任...車輛距離...進入緊急距離範圍內"
+                // 若還沒進緊急距離，僅視為 Low (忽略)? 或者保持 Low 直到進入?
+                if (confidence === CONFIDENCE.MEDIUM) {
+                    if (dist > th.alertDist) {
+                        // 尚未進入緊急區，即使幾何符合路名不符 -> 仍視為 Low (不預警)
+                        continue;
+                    }
+                }
+
+                // 找出最優先的 Threat
+                // 優先順序: High Conf > Medium Conf
+                // 同等級: 最近距離
+
+                if (activeAlert) {
+                    // 比較優先級
+                    if (confidence === CONFIDENCE.HIGH && activeAlert.confidence !== CONFIDENCE.HIGH) {
+                        activeAlert = { cam, dist, context, confidence, thresholds: th };
+                    } else if (confidence === activeAlert.confidence) {
+                        if (dist < activeAlert.dist) {
+                            activeAlert = { cam, dist, context, confidence, thresholds: th };
+                        }
+                    }
+                } else {
+                    activeAlert = { cam, dist, context, confidence, thresholds: th };
+                }
+            }
+
+            // Debug Info
             const debugEl = document.getElementById('detection-debug-info');
-            if (nearestCam) {
-                const state = interactedCameras.get(nearestCam.id);
-                const flashInfo = (state && state.flashStartTime > 0) ? " (已閃)" : "";
-                debugEl.innerText = `鎖定: ${nearestCam.limit}k (${Math.round(minDist)}m)${flashInfo}`;
+            if (activeAlert) {
+                const c = activeAlert.cam;
+                const ctxStr = (activeAlert.context === ROAD_CONTEXT.HIGHWAY) ? "高" : "市";
+                const confStr = (activeAlert.confidence === CONFIDENCE.HIGH) ? "H" : "M";
+                debugEl.innerText = `鎖定[${ctxStr}|${confStr}]: ${c.limit}k (${Math.round(activeAlert.dist)}m)`;
                 debugEl.className = "text-[10px] text-green-400 mt-1 truncate";
-            } else if (absNearest && absMinDist < 800) {
-                debugEl.innerText = `最近 ${Math.round(absMinDist)}m - ${debugMsg}`;
-                debugEl.className = "text-[10px] text-gray-400 mt-1 truncate";
             } else {
                 debugEl.innerText = "範圍內無測速";
                 debugEl.className = "text-[10px] text-gray-500 mt-1 truncate";
             }
 
-            updateUI(minDist, nearestCam, speed);
-            handleVoiceAlert(minDist, nearestCam, speed);
+            if (activeAlert) {
+                updateUI(activeAlert.dist, activeAlert.cam, speed, activeAlert);
+                handleVoiceAlert(activeAlert.dist, activeAlert.cam, speed, activeAlert);
+            } else {
+                updateUI(Infinity, null, speed, null);
+            }
         }
 
         function startGPS() {
@@ -1005,112 +1121,184 @@
             return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         }
 
-        function updateUI(dist, cam, speed) {
+        function updateUI(dist, cam, speed, alertInfo) {
             document.getElementById('speed-display').innerText = speed;
             const elDist = document.getElementById('distance-display');
             const elMsgBox = document.getElementById('alert-message-box');
             const alertOverlay = document.getElementById('alert-overlay');
 
-            // Clear alerts if far away or no camera
-            if (dist > 2000 || !cam) {
+            if (!alertInfo || dist > alertInfo.thresholds.resetDist) {
                 elDist.innerText = "--";
                 alertOverlay.style.display = 'none';
                 elMsgBox.classList.add('hidden');
-                BeepManager.stop(); // Stop sound
+                BeepManager.stop();
                 return;
             }
 
+            const { context, confidence, thresholds } = alertInfo;
             elDist.innerText = Math.round(dist);
             document.getElementById('limit-val').innerText = cam.limit;
 
-            // --- 3-Second Flash Logic (User Requirement) ---
-            let state = interactedCameras.get(cam.id) || { maxStage: 0, lastSeen: 0, flashStartTime: 0 };
-
-            // Determine if we SHOULD show overlay (Red Zone < 200m)
-            const isInRedZone = (dist <= CONFIG.ALERT_DIST);
+            // --- V2 Visual Logic ---
             let shouldShowOverlay = false;
             let shouldFlash = false;
+            let msgText = "";
+            let msgColorClass = "text-yellow-300";
 
-            if (isInRedZone) {
-                // Initialize flash timer if entering red zone for first time
-                if (!state.flashStartTime || state.flashStartTime === 0) {
+            let state = interactedCameras.get(cam.id) || { maxStage: 0 };
+
+            // High Confidence Visuals
+            if (confidence === CONFIDENCE.HIGH) {
+                // Stage 2: Alert (緊急)
+                if (dist <= thresholds.alertDist && dist > thresholds.passDist) {
+                    if (speed > cam.limit) {
+                        shouldShowOverlay = true;
+                        shouldFlash = true; // 閃爍3秒 (由CSS animation控制, JS只開關class)
+                        msgText = `⚠️ 限速 ${cam.limit}`;
+                        msgColorClass = "text-red-400";
+                    } else if (context === ROAD_CONTEXT.CITY && speed >= 10) {
+                        // 市區未超速但有一定速度 -> 紅字無框
+                        msgText = `限速 ${cam.limit}`;
+                        msgColorClass = "text-red-400";
+                    } else if (context === ROAD_CONTEXT.HIGHWAY) {
+                        msgText = `限速 ${cam.limit}`;
+                        msgColorClass = "text-red-400";
+                    }
+                }
+                // Stage 1: Warn (預警)
+                else if (dist <= thresholds.warnDist) {
+                    msgText = `🔔 前方測速`;
+                }
+            }
+            // Medium Confidence Visuals
+            else if (confidence === CONFIDENCE.MEDIUM) {
+                if (dist <= thresholds.alertDist && speed > cam.limit) {
+                    const txt = (context === ROAD_CONTEXT.HIGHWAY) ? "疑似測速" : "可能有測速";
+                    msgText = `⚠️ ${txt}`;
+                    msgColorClass = "text-red-400";
+                }
+            }
+
+            // Apply Overlay
+            // 規則: "紅色邊框並閃爍三秒"
+            // 我們這裡簡化為只要在條件內就顯示。若要精確 "只閃3秒然後停"，需要記錄時間。
+            // 之前的實作有 flashStartTime，這裡沿用。
+            if (shouldFlash) {
+                if (!state.flashStartTime) {
                     state.flashStartTime = Date.now();
                     interactedCameras.set(cam.id, state);
                 }
-
-                // Check 3s limit
                 const elapsed = Date.now() - state.flashStartTime;
                 if (elapsed < 3000) {
-                    shouldShowOverlay = true;
-                    // Flash only if moving > 20 (moving mode), otherwise just solid red (static mode)
-                    if (speed > 20) shouldFlash = true;
+                    alertOverlay.style.display = 'block';
+                    alertOverlay.style.animation = 'pulse 0.8s infinite';
+                } else {
+                    // 超過3秒，顯示紅框但不閃? 規則沒說，通常是恆亮或消失。
+                    // 假設恆亮提醒
+                    alertOverlay.style.display = 'block';
+                    alertOverlay.style.animation = 'none';
                 }
-            }
-
-            // Apply UI
-            if (shouldShowOverlay) {
+                alertOverlay.style.borderColor = 'rgba(220, 38, 38, 1)';
+            } else if (shouldShowOverlay) {
+                // 純紅框 (未定義此狀態，但為了安全)
                 alertOverlay.style.display = 'block';
-                alertOverlay.style.animation = shouldFlash ? 'pulse 0.8s infinite' : 'none';
-                alertOverlay.style.borderColor = 'rgba(220, 38, 38, 1)'; // Solid red border
+                alertOverlay.style.animation = 'none';
             } else {
                 alertOverlay.style.display = 'none';
+                // Reset flash timer if we exit flash condition? 
+                // 為了避免反覆觸發，通常不Reset，除非 ResetDist.
             }
 
-            // Msg Box logic (Yellow/Red)
-            if (dist <= CONFIG.WARN_DIST) {
+            // Apply Message Box
+            if (msgText) {
                 elMsgBox.classList.remove('hidden');
-                if (dist <= CONFIG.ALERT_DIST) {
-                    elMsgBox.innerHTML = `<span class="text-xl font-bold text-red-400">⚠️ 限速 ${cam.limit}</span>`;
-                } else {
-                    elMsgBox.innerHTML = `<span class="text-lg font-bold text-yellow-300">🔔 前方測速</span>`;
-                }
+                elMsgBox.innerHTML = `<span class="text-xl font-bold ${msgColorClass}">${msgText}</span>`;
             } else {
                 elMsgBox.classList.add('hidden');
             }
         }
 
-        function handleVoiceAlert(dist, cam, speed) {
-            if (!audioEnabled || !cam) return;
+        function handleVoiceAlert(dist, cam, speed, alertInfo) {
+            if (!audioEnabled || !cam || !alertInfo) return;
 
+            const { context, confidence, thresholds } = alertInfo;
             let state = interactedCameras.get(cam.id) || { maxStage: 0, lastSeen: 0, flashStartTime: 0 };
 
-            // Reset if far away
-            if (dist > CONFIG.RESET_DIST) {
-                interactedCameras.delete(cam.id);
-                state = { maxStage: 0, lastSeen: 0, flashStartTime: 0 };
-            }
-
-            // Stage 1: 500m 預警 (Yellow)
-            if (dist <= CONFIG.WARN_DIST && dist > CONFIG.ALERT_DIST) {
+            // Stage 1: Warn (預警)
+            if (confidence === CONFIDENCE.HIGH && dist <= thresholds.warnDist && dist > thresholds.alertDist) {
                 if (state.maxStage < 1) {
-                    speak(`前方測速，限速${cam.limit}`);
+                    const txt = (context === ROAD_CONTEXT.HIGHWAY) ?
+                        `前方測速照相，限速${cam.limit}` : `前方測速，限速${cam.limit}`;
+                    speak(txt);
                     state.maxStage = 1;
                 }
             }
 
-            // Stage 2: 200m 緊急 (Red)
-            if (dist <= CONFIG.ALERT_DIST && dist > CONFIG.PASS_DIST) {
-                // Only speak if speeding > 20km/h and haven't spoken yet for this stage
-                if (speed >= CONFIG.MIN_SPEED_ALERT && state.maxStage < 2) {
-                    speak(`注意，限速${cam.limit}`);
-                    state.maxStage = 2;
+            // Stage 2: Alert (緊急)
+            if (dist <= thresholds.alertDist && dist > thresholds.passDist) {
+                if (confidence === CONFIDENCE.HIGH) {
+                    if (speed > cam.limit) {
+                        if (state.maxStage < 2) {
+                            const txt = (context === ROAD_CONTEXT.HIGHWAY) ?
+                                `減速，限速${cam.limit}` : `注意，限速${cam.limit}`;
+                            speak(txt);
+                            state.maxStage = 2;
+                        }
+                    } else if (context === ROAD_CONTEXT.CITY && speed >= 10) {
+                        if (state.maxStage < 2) {
+                            speak(`前方測速`);
+                            state.maxStage = 2;
+                        }
+                    }
+                }
+                else if (confidence === CONFIDENCE.MEDIUM && speed > cam.limit) {
+                    if (state.maxStage < 2) { // 使用 Stage 2 作為中信任的觸發標記
+                        const txt = (context === ROAD_CONTEXT.HIGHWAY) ?
+                            `注意，疑似測速照相` : `注意，前方可能有測速`;
+                        speak(txt);
+                        state.maxStage = 2;
+                    }
                 }
             }
 
-            // Stage 3: <100m (Beep)
-            if (dist <= CONFIG.PASS_DIST) {
-                // Beep only if moving > 5km/h OR speeding
-                const isMoving = speed > 5;
-                const isSpeeding = speed > cam.limit;
-
-                if (isMoving || isSpeeding) {
-                    BeepManager.start();
+            // Stage 3: Pass (通過) - Beep Only
+            // High Confidence Only (Rules impl: Medium Conf only has Alert triggers)
+            if (confidence === CONFIDENCE.HIGH && dist <= thresholds.passDist) {
+                if (context === ROAD_CONTEXT.HIGHWAY) {
+                    // 高速: 超速->連續嗶; 未超速->單次嗶
+                    if (speed > cam.limit) {
+                        BeepManager.start(); // Loop beep
+                    } else {
+                        // 單次嗶 (Hack: Start then Stop after short delay, or custom method)
+                        // 若尚未嗶過 (如何追蹤? 使用 stage 3)
+                        if (state.maxStage < 3) {
+                            BeepManager.playTone(); // Single tone
+                            state.maxStage = 3;
+                        }
+                        BeepManager.stop(); // Ensure loop is off
+                    }
                 } else {
-                    BeepManager.stop();
+                    // 市區: 超速 OR 時速>20 -> 嗶聲 (User Request: 5->20)
+                    // The Rule says: "若車速超過速限，或車速大於每小時五公里" -> Plan corrected to 20?
+                    // Original User Request in Step 14: "只有當... (> 20 km/h) 或 超速... 時才會發出聲音"
+                    // User Comprehensive Rule (Step 67): "若車速超過速限，或車速大於每小時五公里" 
+                    // Wait. User's Step 67 rule says "5km/h". User's Step 14 said "20km/h".
+                    // The PROMPT Step 67 "Comprehensive Rules" is the latest. 
+                    // However, Step 14 was a correction request. Step 67 seems to be a template provided by user? 
+                    // Let's stick to the Correction (Step 14) which specifically asked for >20. 
+                    // But Step 67 TEXT explicitly says "五公里". 
+                    // I will check the Plan. Plan says "beep threshold from 5 -> 20 km/h".
+                    // User approved Plan in Step 80. So I use 20.
+
+                    if (speed > cam.limit || speed > 20) {
+                        BeepManager.start();
+                    } else {
+                        BeepManager.stop();
+                    }
                 }
             } else {
-                // Stop beep if out of Stage 3
-                if (dist > CONFIG.PASS_DIST) BeepManager.stop();
+                // Out of Stage 3 or Low/Med Conf
+                if (dist > thresholds.passDist) BeepManager.stop();
             }
 
             state.lastSeen = Date.now();
