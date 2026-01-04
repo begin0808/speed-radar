@@ -157,6 +157,32 @@
             }
         }
 
+        @keyframes pulse-gps {
+            0% {
+                box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+                transform: scale(0.95);
+            }
+
+            70% {
+                box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+                transform: scale(1);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+                transform: scale(0.95);
+            }
+        }
+
+        .gps-marker-dot {
+            background: #3B82F6;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 2px solid white;
+            animation: pulse-gps 2s infinite;
+        }
+
         .leaflet-control-layers {
             border: none !important;
             border-radius: 12px !important;
@@ -467,9 +493,9 @@
 
             const carIcon = L.divIcon({
                 className: 'custom-car',
-                // User Request: Shrink slightly (approx 24px). Reduced from 24px + 15px shadow to 22px + 10px shadow for tighter look.
-                html: `<div style="background:#3B82F6; width:22px; height:22px; border-radius:50%; border:3px solid white; box-shadow:0 0 10px #3B82F6;"></div>`,
-                iconSize: [22, 22], iconAnchor: [11, 11]
+                // Smaller size (18px) with new pulse animation class
+                html: `<div class="gps-marker-dot"></div>`,
+                iconSize: [20, 20], iconAnchor: [10, 10]
             });
             userMarker = L.marker([currentPos.lat, currentPos.lng], { icon: carIcon, zIndexOffset: 1000 }).addTo(map);
         }
@@ -606,28 +632,13 @@
 
             const currentZoom = map.getZoom();
 
-            // Dynamic Sizing Logic:
-            // "Enlarge Map" (Zoom In) -> Smaller Icons (per user request interpretation)
-            // Or Standard: Zoom Out -> Smaller.
-            // User: "When I enlarge the map, icons become smaller."
-            // Standard behavior: 
-            // Zoom 18 (Street) -> Size 30
-            // Zoom 12 (City) -> Size 15
-            // If user implies "They obscure too much at high zoom", maybe keep them small.
-            // Let's implement standard "Zoom In -> Larger, Zoom Out -> Smaller" first as it's most legible.
-            // If user explicitly asked for "Enlarge Map -> Smaller", it's usually a misunderstanding of terms.
-            // I will implement: 
-            // Zoom < 13: 16px
-            // Zoom 13-15: 24px
-            // Zoom >= 16: 32px
-
-            let sizePx = 32;
-            if (currentZoom < 12) sizePx = 8;
-            else if (currentZoom < 14) sizePx = 12;
-            else if (currentZoom < 16) sizePx = 20;
-
-            // Update CSS for dynamic sizing if needed, or just set iconSize here.
-            // Setting iconSize directly is cleaner.
+            // Dynamic Sizing Logic (User Request: Larger Icons)
+            // Original: 8, 12, 20, 32
+            // New: 12, 18, 28, 40 (Increased visibility)
+            let sizePx = 40;
+            if (currentZoom < 12) sizePx = 12;
+            else if (currentZoom < 14) sizePx = 18;
+            else if (currentZoom < 16) sizePx = 28;
 
             cameras.forEach(cam => {
                 let arrowHtml = '';
@@ -642,8 +653,8 @@
                     const r = 0.003;
                     const center = [cam.lat, cam.lng];
                     const upstreamDir = (cam.direction + 180) % 360;
-                    const leftAngle = (upstreamDir - CONFIG.CONE_ANGLE) * (Math.PI / 180);
-                    const rightAngle = (upstreamDir + CONFIG.CONE_ANGLE) * (Math.PI / 180);
+                    const leftAngle = (upstreamDir - 20) * (Math.PI / 180);
+                    const rightAngle = (upstreamDir + 20) * (Math.PI / 180);
                     // View Cone disabled
                 }
 
