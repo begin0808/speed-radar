@@ -976,40 +976,32 @@
                     }
                 }
 
-                if (isThreat) {
-                    if (d < minDist) {
-                        minDist = d;
-                        nearestCam = cam;
-                    }
+                // Debug Info
+                const debugEl = document.getElementById('detection-debug-info');
+                if (activeAlert) {
+                    const c = activeAlert.cam;
+                    const ctxStr = (activeAlert.context === ROAD_CONTEXT.HIGHWAY) ? "高" : "市";
+                    const confStr = (activeAlert.confidence === CONFIDENCE.HIGH) ? "H" : "M";
+                    debugEl.innerText = `鎖定[${ctxStr}|${confStr}]: ${c.limit}k (${Math.round(activeAlert.dist)}m)`;
+                    debugEl.className = "text-[10px] text-green-400 mt-1 truncate";
+                } else {
+                    debugEl.innerText = "範圍內無測速";
+                    debugEl.className = "text-[10px] text-gray-500 mt-1 truncate";
                 }
-            } // End Loop
 
-            // Debug Info
-            const debugEl = document.getElementById('detection-debug-info');
-            if (activeAlert) {
-                const c = activeAlert.cam;
-                const ctxStr = (activeAlert.context === ROAD_CONTEXT.HIGHWAY) ? "高" : "市";
-                const confStr = (activeAlert.confidence === CONFIDENCE.HIGH) ? "H" : "M";
-                debugEl.innerText = `鎖定[${ctxStr}|${confStr}]: ${c.limit}k (${Math.round(activeAlert.dist)}m)`;
-                debugEl.className = "text-[10px] text-green-400 mt-1 truncate";
-            } else {
-                debugEl.innerText = "範圍內無測速";
-                debugEl.className = "text-[10px] text-gray-500 mt-1 truncate";
-            }
+                if (activeAlert) {
+                    updateUI(activeAlert.dist, activeAlert.cam, speed, activeAlert);
+                    handleVoiceAlert(activeAlert.dist, activeAlert.cam, speed, activeAlert);
+                } else {
+                    // Ensure we update UI even if no alert
+                    updateUI(Infinity, null, speed, null);
+                }
 
-            if (activeAlert) {
-                updateUI(activeAlert.dist, activeAlert.cam, speed, activeAlert);
-                handleVoiceAlert(activeAlert.dist, activeAlert.cam, speed, activeAlert);
-            } else {
-                // Ensure we update UI even if no alert
+            } catch (err) {
+                console.error("checkProximity Error:", err);
+                // Fallback: still update speed
                 updateUI(Infinity, null, speed, null);
             }
-
-        } catch (err) {
-            console.error("checkProximity Error:", err);
-            // Fallback: still update speed
-            updateUI(Infinity, null, speed, null);
-        }
         }
 
         function startGPS() {
