@@ -887,93 +887,102 @@
         const interactedCameras = new Map();
 
         function checkProximity(lat, lng, speed = 0, heading = null) {
-            fetchRoadName(lat, lng);
-            const candidates = getNearbyCameras(lat, lng);
+            try { // Protection against crashes stopping UI updates
+                fetchRoadName(lat, lng);
+                const candidates = getNearbyCameras(lat, lng);
 
-            let activeAlert = null; // { cam, dist, context, confidence, thresholds }
-            let minThreatDist = Infinity;
+                let activeAlert = null; // { cam, dist, context, confidence, thresholds }
+                let minThreatDist = Infinity;
 
-            for (let cam of candidates) {
-                const dist = getDistance(lat, lng, cam.lat, cam.lng);
+                for (let cam of candidates) {
+                    const dist = getDistance(lat, lng, cam.lat, cam.lng);
 
-                // 初步過濾 (最大可能預警距離 800m)
-                if (dist > 800) continue;
+                    // 初步過濾 (最大可能預警距離 800m)
+                    if (dist > 800) continue;
 
-                const context = getRoadContext(currentRoadName, cam);
-                const th = getThresholds(speed, context);
+                    const context = getRoadContext(currentRoadName, cam);
+                    const th = getThresholds(speed, context);
 
-                // 解除狀態判斷
-                if (dist > th.resetDist) {
-                    interactedCameras.delete(cam.id);
-                    continue;
-                }
-
-                // 計算信任等級
-                // 先算幾何
-                // Geometry Rules:
-                // Speed < 10: No heading check.
-                // Distance < 50: Fan 60 deg.
-                // Distance < 80: Ignore heading check (anti-jitter).
-                // Normal: Heading 45, Fan 20.
-
-                let isGeometryOk = true;
-                if (typeof cam.direction !== 'undefined') {
-                    const fanAngle = (dist < 50) ? 60 : 20; // 扇形角度
-
-                    // Position Check (Car in Fan)
-                    const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
-                    const expectedUpstream = (cam.direction + 180) % 360;
-                    let posDiff = Math.abs(bearingCamToCar - expectedUpstream);
-                    if (posDiff > 180) posDiff = 360 - posDiff;
-
-                    if (posDiff > fanAngle) isGeometryOk = false;
-
-                    // Heading Check (Car moving towards Cam)
-                    if (speed >= 10 && dist >= 80) { // <80 or <10 ignore
-                        let hDiff = Math.abs(heading - cam.direction);
-                        if (hDiff > 180) hDiff = 360 - hDiff;
-                        if (hDiff > 45) isGeometryOk = false;
-                    }
-                }
-
-                // 決定 Confidence
-                // 若 Low Confidence (Geometry Fail or Explicit Logic) -> Ignore
-                if (!isGeometryOk) {
-                    // 如果幾何都不符，直接 Low
-                    // 除了少數特例 (如路名完全吻合但GPS漂移)? 規則說 "不在扇形...忽略" -> Low
-                    interactedCameras.delete(cam.id);
-                    continue;
-                }
-
-                let confidence = getConfidenceLevel(cam, currentRoadName, dist, heading, speed);
-
-                // Medium Confidence 修正:
-                // User Rule: "中信任...車輛距離...進入緊急距離範圍內"
-                // 若還沒進緊急距離，僅視為 Low (忽略)? 或者保持 Low 直到進入?
-                if (confidence === CONFIDENCE.MEDIUM) {
-                    if (dist > th.alertDist) {
-                        // 尚未進入緊急區，即使幾何符合路名不符 -> 仍視為 Low (不預警)
+                    // 解除狀態判斷
+                    if (dist > th.resetDist) {
+                        interactedCameras.delete(cam.id);
                         continue;
                     }
-                }
 
-                // 找出最優先的 Threat
-                // 優先順序: High Conf > Medium Conf
-                // 同等級: 最近距離
+                    // 計算信任等級
+                    // 先算幾何
+                    // Geometry Rules:
+                    // Speed < 10: No heading check.
+                    // Distance < 50: Fan 60 deg.
+                    // Distance < 80: Ignore heading check (anti-jitter).
+                    // Normal: Heading 45, Fan 20.
 
-                if (activeAlert) {
-                    // 比較優先級
-                    if (confidence === CONFIDENCE.HIGH && activeAlert.confidence !== CONFIDENCE.HIGH) {
-                        activeAlert = { cam, dist, context, confidence, thresholds: th };
-                    } else if (confidence === activeAlert.confidence) {
-                        if (dist < activeAlert.dist) {
-                            activeAlert = { cam, dist, context, confidence, thresholds: th };
+                    let isGeometryOk = true;
+                    if (typeof cam.direction !== 'undefined') {
+                        const fanAngle = (dist < 50) ? 60 : 20; // 扇形角度
+
+                        // Position Check (Car in Fan)
+                        const bearingCamToCar = getBearing(cam.lat, cam.lng, lat, lng);
+                        const expectedUpstream = (cam.direction + 180) % 360;
+                        let posDiff = Math.abs(bearingCamToCar - expectedUpstream);
+                        if (posDiff > 180) posDiff = 360 - posDiff;
+
+                        if (posDiff > fanAngle) isGeometryOk = false;
+
+                        // Heading Check (Car moving towards Cam)
+                        if (speed >= 10 && dist >= 80) { // <80 or <10 ignore
+                            let hDiff = Math.abs(heading - cam.direction);
+                            if (hDiff > 180) hDiff = 360 - hDiff;
+                            if (hDiff > 45) isGeometryOk = false;
                         }
                     }
-                } else {
-                    activeAlert = { cam, dist, context, confidence, thresholds: th };
+
+                    // 決定 Confidence
+                    // 若 Low Confidence (Geometry Fail or Explicit Logic) -> Ignore
+                    if (!isGeometryOk) {
+                        // 如果幾何都不符，直接 Low
+                        // 除了少數特例 (如路名完全吻合但GPS漂移)? 規則說 "不在扇形...忽略" -> Low
+                        interactedCameras.delete(cam.id);
+                        continue;
+                    }
+
+                    let confidence = getConfidenceLevel(cam, currentRoadName, dist, heading, speed);
+
+                    // Medium Confidence 修正:
+                    // User Rule: "中信任...車輛距離...進入緊急距離範圍內"
+                    // 若還沒進緊急距離，僅視為 Low (忽略)? 或者保持 Low 直到進入?
+                    if (confidence === CONFIDENCE.MEDIUM) {
+                        if (dist > th.alertDist) {
+                            // 尚未進入緊急區，即使幾何符合路名不符 -> 仍視為 Low (不預警)
+                            continue;
+                        }
+                    }
+
+                    // 找出最優先的 Threat
+                    // 優先順序: High Conf > Medium Conf
+                    // 同等級: 最近距離
+
+                    if (activeAlert) {
+                        // 比較優先級
+                        if (confidence === CONFIDENCE.HIGH && activeAlert.confidence !== CONFIDENCE.HIGH) {
+                            activeAlert = { cam, dist, context, confidence, thresholds: th };
+                        } else if (confidence === activeAlert.confidence) {
+                            if (dist < activeAlert.dist) {
+                                activeAlert = { cam, dist, context, confidence, thresholds: th };
+                            }
+                        }
+                    } else {
+                        activeAlert = { cam, dist, context, confidence, thresholds: th };
+                    }
                 }
-            }
+
+                if (isThreat) {
+                    if (d < minDist) {
+                        minDist = d;
+                        nearestCam = cam;
+                    }
+                }
+            } // End Loop
 
             // Debug Info
             const debugEl = document.getElementById('detection-debug-info');
@@ -992,8 +1001,15 @@
                 updateUI(activeAlert.dist, activeAlert.cam, speed, activeAlert);
                 handleVoiceAlert(activeAlert.dist, activeAlert.cam, speed, activeAlert);
             } else {
+                // Ensure we update UI even if no alert
                 updateUI(Infinity, null, speed, null);
             }
+
+        } catch (err) {
+            console.error("checkProximity Error:", err);
+            // Fallback: still update speed
+            updateUI(Infinity, null, speed, null);
+        }
         }
 
         function startGPS() {
@@ -1027,21 +1043,31 @@
                     let gpsSpeed = pos.coords.speed; // m/s
                     const now = Date.now();
 
-                    // --- Manual Speed Calculation (Fallback) ---
-                    // Some devices return null or 0 for speed even when moving.
-                    // Calculate speed if GPS speed is missing but position changed significantly.
-                    if ((gpsSpeed === null || gpsSpeed === 0) && lastGpsPos) {
-                        const timeDiff = (now - lastGpsTime) / 1000; // seconds
-                        if (timeDiff > 1.0) { // Update every 1+ sec for stability
-                            const dist = getDistance(lastGpsPos.lat, lastGpsPos.lng, latitude, longitude); // meters
-                            if (dist > 5) { // Filter jitter (move > 5m)
-                                gpsSpeed = dist / timeDiff; // m/s
-                            }
-                        }
-                    }
+                    // --- Manual Speed Calculation (Fallback 2.0) ---
+                    // Strategy: Accumulate distance until enough time (e.g. 1s) passes to calc reliable speed
 
-                    // Avoid erratic calc speed updates (only update reference if valid move)
-                    if (!lastGpsPos || getDistance(lastGpsPos.lat, lastGpsPos.lng, latitude, longitude) > 2) {
+                    if (gpsSpeed === null || gpsSpeed === 0) {
+                        if (lastGpsPos) {
+                            const timeDiff = (now - lastGpsTime) / 1000; // seconds
+
+                            // Only calculate if > 1.0s passed to avoid jitter
+                            if (timeDiff >= 1.0) {
+                                const dist = getDistance(lastGpsPos.lat, lastGpsPos.lng, latitude, longitude); // meteres
+                                // Threshold: 0.5m/s (~1.8km/h) to consider moving
+                                gpsSpeed = dist / timeDiff;
+
+                                // Update reference point
+                                lastGpsPos = { lat: latitude, lng: longitude };
+                                lastGpsTime = now;
+                            }
+                            // If < 1.0s, KEEP old lastGpsPos/Time to accumulate more diff
+                        } else {
+                            // First point
+                            lastGpsPos = { lat: latitude, lng: longitude };
+                            lastGpsTime = now;
+                        }
+                    } else {
+                        // Native speed available, reset manual ref
                         lastGpsPos = { lat: latitude, lng: longitude };
                         lastGpsTime = now;
                     }
@@ -1055,7 +1081,8 @@
                         map.setView(center, 15.3);
                     }
 
-                    const kmh = gpsSpeed ? Math.round(gpsSpeed * 3.6) : 0;
+                    // Use max to ensure non-negative
+                    const kmh = gpsSpeed ? Math.max(0, Math.round(gpsSpeed * 3.6)) : 0;
 
                     debugHeading.innerText = `方向: ${heading !== null && !isNaN(heading) ? Math.round(heading) + '°' : '--'}`;
                     debugAccuracy.innerText = `精度: ${Math.round(accuracy)}m`;
