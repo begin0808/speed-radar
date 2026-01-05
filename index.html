@@ -1018,46 +1018,64 @@
                 return;
             }
 
+            let lastGpsTime = 0;
+            let lastGpsPos = null;
+
             watchId = navigator.geolocation.watchPosition(
                 (pos) => {
-                    const { latitude, longitude, speed, heading, accuracy } = pos.coords;
-                    currentPos = { lat: latitude, lng: longitude };
+                    const { latitude, longitude, heading, accuracy } = pos.coords;
+                    let gpsSpeed = pos.coords.speed; // m/s
+                    const now = Date.now();
 
+                    // --- Manual Speed Calculation (Fallback) ---
+                    // Some devices return null or 0 for speed even when moving.
+                    // Calculate speed if GPS speed is missing but position changed significantly.
+                    if ((gpsSpeed === null || gpsSpeed === 0) && lastGpsPos) {
+                        const timeDiff = (now - lastGpsTime) / 1000; // seconds
+                        if (timeDiff > 1.0) { // Update every 1+ sec for stability
+                            const dist = getDistance(lastGpsPos.lat, lastGpsPos.lng, latitude, longitude); // meters
+                            if (dist > 5) { // Filter jitter (move > 5m)
+                                gpsSpeed = dist / timeDiff; // m/s
+                            }
+                        }
+                    }
+
+                    // Avoid erratic calc speed updates (only update reference if valid move)
+                    if (!lastGpsPos || getDistance(lastGpsPos.lat, lastGpsPos.lng, latitude, longitude) > 2) {
+                        lastGpsPos = { lat: latitude, lng: longitude };
+                        lastGpsTime = now;
+                    }
+
+                    currentPos = { lat: latitude, lng: longitude };
                     userMarker.setLatLng([latitude, longitude]);
 
-                    // --- 地圖自動回正邏輯 (10秒閒置檢測) ---
+                    // --- Auto-center Logic ---
                     if (!isUserInteracting && (Date.now() - lastUserInteractionTime > CONFIG.AUTO_CENTER_DELAY)) {
                         const center = getOffsetCenter(latitude, longitude, 15.3);
                         map.setView(center, 15.3);
                     }
 
-                    const kmh = speed ? Math.round(speed * 3.6) : 0;
+                    const kmh = gpsSpeed ? Math.round(gpsSpeed * 3.6) : 0;
 
-                    debugHeading.innerText = `方向: ${heading !== null ? Math.round(heading) + '°' : '無'}`;
+                    debugHeading.innerText = `方向: ${heading !== null && !isNaN(heading) ? Math.round(heading) + '°' : '--'}`;
                     debugAccuracy.innerText = `精度: ${Math.round(accuracy)}m`;
 
-                    // --- 關鍵修正：精度過濾 ---
                     if (accuracy > CONFIG.GPS_ACCURACY_THRESHOLD) {
                         indicator.className = "w-2 h-2 rounded-full bg-yellow-500 animate-pulse";
                         text.innerText = "GPS 定位中 (精度低)";
-                        // 精度太差，不執行警示判斷，並清除畫面上的警示
-                        updateUI(Infinity, null, 0);
+                        // Low accuracy: Show 0 speed but don't hide road name if already fetched
+                        updateUI(Infinity, null, 0, null);
                     } else {
                         indicator.className = "w-2 h-2 rounded-full bg-green-500 animate-pulse";
                         text.innerText = "GPS 連線中";
-                        // 精度夠好，才執行警示判斷
                         checkProximity(latitude, longitude, kmh, heading);
                     }
                 },
                 (err) => {
                     indicator.className = "w-2 h-2 rounded-full bg-red-500";
                     let errorMsg = "GPS 定位失敗";
-                    if (err.message && err.message.includes("permissions policy")) {
-                        errorMsg = "預覽不支援 GPS (請按模擬)";
-                    } else {
-                        console.error("GPS Error:", err);
-                        if (err.code === 1) errorMsg = "GPS 權限被拒絕";
-                    }
+                    console.error("GPS Error:", err);
+                    if (err.code === 1) errorMsg = "GPS 權限被拒絕";
                     text.innerText = errorMsg;
                 },
                 { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
