@@ -243,6 +243,9 @@
         <button onclick="toggleAudio()" id="btn-audio" class="btn-control">
             🔊 語音開啟
         </button>
+        <button onclick="exportOverrides()" class="btn-control mt-2 bg-blue-600 text-white">
+            ⬇️ 匯出修正
+        </button>
     </div>
 
     <div id="right-controls">
@@ -827,19 +830,6 @@
                     `)
                     .addTo(markersLayer);
             });
-
-            // Add Export Button to debug area if not exists
-            if (!document.getElementById('btn-export-fix')) {
-                const dbgArea = document.getElementById('debug-area');
-                if (dbgArea) {
-                    const btn = document.createElement('button');
-                    btn.id = 'btn-export-fix';
-                    btn.innerText = "匯出修正";
-                    btn.className = "mt-2 bg-blue-600 px-2 py-1 rounded text-xs text-white hover:bg-blue-500 w-full";
-                    btn.onclick = exportOverrides;
-                    dbgArea.appendChild(btn);
-                }
-            }
         }
 
         // Monitor Zoom for Dynamic Sizing
