@@ -662,12 +662,55 @@
                 // }
 
                 if (typeof cam.direction !== 'undefined' && !isTainan) {
-                    const r = 0.003;
+                    const r = 150; // Visual radius in meters
                     const center = [cam.lat, cam.lng];
+
+                    // Logic: Cam faces 'direction'. Cars approach from 'direction + 180'.
+                    // We want to visualize the area where the CAR needs to be to trigger.
+                    // This is the "Upstream" sector.
                     const upstreamDir = (cam.direction + 180) % 360;
-                    const leftAngle = (upstreamDir - 20) * (Math.PI / 180);
-                    const rightAngle = (upstreamDir + 20) * (Math.PI / 180);
-                    // View Cone disabled
+
+                    // Sector Config: +/- 20 degrees
+                    const angle1 = (upstreamDir - 20) * (Math.PI / 180);
+                    const angle2 = (upstreamDir + 20) * (Math.PI / 180);
+
+                    // Calculate points
+                    // Approximation for meters to lat/lng degrees (rough but fast)
+                    // 1 deg lat ~ 111km. 1 deg lng ~ 111km * cos(lat)
+                    const ky = 40000 / 360; // km/deg
+                    const kx = Math.cos(Math.PI * cam.lat / 180.0) * ky;
+                    const dLat = (r / 1000) / ky; // radius in deg lat is much simpler? 111111m per deg
+                    // use simple trigonometry on lat/lng offsets
+
+                    // Better: L.GeometryUtil or manual calc
+                    // p1
+                    const p1Lat = cam.lat + (r / 111111) * Math.cos(angle1 * -1 + Math.PI / 2); // Leaflet/Math angle mismatch?
+                    // Math.cos(theta): standard math runs counter-clockwise from East (0).
+                    // Heading is Clockwise from North (0).
+                    // Math Angle = (90 - Heading) * PI / 180
+
+                    const toRad = deg => (90 - deg) * (Math.PI / 180);
+
+                    const rad1 = toRad(upstreamDir - 20);
+                    const rad2 = toRad(upstreamDir + 20);
+
+                    const p1 = [
+                        cam.lat + (r / 111319) * Math.sin(rad1),
+                        cam.lng + (r / (111319 * Math.cos(cam.lat * Math.PI / 180))) * Math.cos(rad1)
+                    ];
+                    const p2 = [
+                        cam.lat + (r / 111319) * Math.sin(rad2),
+                        cam.lng + (r / (111319 * Math.cos(cam.lat * Math.PI / 180))) * Math.cos(rad2)
+                    ];
+
+                    // Draw Polygon (Triangle)
+                    L.polygon([center, p1, p2], {
+                        color: 'transparent', // No border
+                        fillColor: '#FDE047', // Yellow-300
+                        fillOpacity: 0.3,
+                        weight: 0,
+                        interactive: false
+                    }).addTo(markersLayer);
                 }
 
                 // Default: Red
