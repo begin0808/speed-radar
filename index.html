@@ -569,8 +569,12 @@
                                 limitVal = parseInt(match[0], 10);
                             }
 
+                            // Generate Unique ID if missing (Stable based on LatLng)
+                            const genId = item.id || `C_${lat.toFixed(5)}_${lng.toFixed(5)}`;
+
                             if (!isDuplicate) {
                                 cameras.push({
+                                    id: genId,
                                     lat: lat,
                                     lng: lng,
                                     limit: limitVal,
@@ -595,10 +599,71 @@
                 statusTag.classList.replace('bg-yellow-700', 'bg-blue-600');
             }
 
+            // Apply LocalStorage Overrides
+            const overrides = JSON.parse(localStorage.getItem('camera_edit_overrides') || '{}');
+            cameras.forEach(c => {
+                if (overrides[c.id]) {
+                    if (typeof overrides[c.id].direction !== 'undefined') {
+                        c.direction = overrides[c.id].direction;
+                        c.isModified = true; // Flag for UI
+                    }
+                }
+            });
+
             // Build Spatial Index (Grid)
             buildSpatialIndex();
-
+            // Render
             renderCameras();
+        }
+
+        // --- Camera Editing Features ---
+        function updateCameraDirection(id, delta) {
+            const camIndex = cameras.findIndex(c => c.id == id); // Loose equality for number/string IDs
+            if (camIndex === -1) return;
+
+            const cam = cameras[camIndex];
+            if (typeof cam.direction === 'undefined') cam.direction = 0; // Init if undefined
+
+            let newDir = (cam.direction + delta) % 360;
+            if (newDir < 0) newDir += 360;
+
+            cam.direction = newDir;
+            cam.isModified = true;
+
+            // Save to LocalStorage
+            const overrides = JSON.parse(localStorage.getItem('camera_edit_overrides') || '{}');
+            if (!overrides[cam.id]) overrides[cam.id] = {};
+            overrides[cam.id].direction = newDir;
+            localStorage.setItem('camera_edit_overrides', JSON.stringify(overrides));
+
+            // Re-render
+            renderCameras();
+
+            // Show Feedback
+            alert(`已修正相機(ID:${cam.id})方向為: ${Math.round(newDir)}度`);
+        }
+
+        function exportOverrides() {
+            const overrides = JSON.parse(localStorage.getItem('camera_edit_overrides') || '{}');
+            if (Object.keys(overrides).length === 0) {
+                alert("尚無任何修正資料。");
+                return;
+            }
+            const str = JSON.stringify(overrides, null, 2);
+            console.log("修正資料:", str);
+            // Create Download
+            const blob = new Blob([str], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = "camera_fixes.json";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            alert("已匯出修正檔 (JSON)。請提供給開發者更新。");
+        }
+
+        renderCameras();
         }
 
         // --- Spatial Indexing System ---
@@ -743,17 +808,39 @@
 
                 const sourceText = isTainan ? '<br><span class="text-xs text-orange-500 font-bold">(台南市府新增)</span>' : '';
 
+                const modTag = cam.isModified ? '<span class="text-xs text-green-400 font-bold block">[已手動修正]</span>' : '';
+                const dirVal = (typeof cam.direction !== 'undefined') ? Math.round(cam.direction) : '無';
+
                 L.marker([cam.lat, cam.lng], { icon: icon })
                     .bindPopup(`
-                        <div class="text-center">
-                            <div class="font-bold text-lg">${cam.limit} km/h</div>
-                            <div class="text-sm text-gray-500">${cam.direct || '方向未知'}</div>
-                            <div class="text-xs text-gray-400 mt-1">${cam.address}</div>
+                        <div class="text-center p-2 min-w-[200px]">
+                            <div class="font-bold text-lg mb-1">${cam.limit} km/h</div>
+                            <div class="text-sm text-gray-500 mb-1">${cam.direct || '方向未知'} (${dirVal}°)</div>
+                            ${modTag}
+                            <div class="text-xs text-gray-400 mb-3">${cam.address}</div>
+                            
+                            <div class="border-t border-gray-700 pt-2 flex justify-between items-center gap-2">
+                                <button onclick="updateCameraDirection('${cam.id}', -10)" class="bg-gray-700 hover:bg-gray-600 text-white px-2 py-1 rounded text-xs">↺ 左轉10°</button>
+                                <button onclick="updateCameraDirection('${cam.id}', 10)" class="bg-gray-700 hover:bg-gray-600 text-white px-2 py-1 rounded text-xs">右轉10° ↻</button>
+                            </div>
                             ${sourceText}
                         </div>
                     `)
                     .addTo(markersLayer);
             });
+
+            // Add Export Button to debug area if not exists
+            if (!document.getElementById('btn-export-fix')) {
+                const dbgArea = document.getElementById('debug-area');
+                if (dbgArea) {
+                    const btn = document.createElement('button');
+                    btn.id = 'btn-export-fix';
+                    btn.innerText = "匯出修正";
+                    btn.className = "mt-2 bg-blue-600 px-2 py-1 rounded text-xs text-white hover:bg-blue-500 w-full";
+                    btn.onclick = exportOverrides;
+                    dbgArea.appendChild(btn);
+                }
+            }
         }
 
         // Monitor Zoom for Dynamic Sizing
