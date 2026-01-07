@@ -602,12 +602,27 @@
                 statusTag.classList.replace('bg-yellow-700', 'bg-blue-600');
             }
 
-            // Apply LocalStorage Overrides
-            const overrides = JSON.parse(localStorage.getItem('camera_edit_overrides') || '{}');
+            // 1. Try to load "camera_fixes.json" (Permanent Fixes from Disk)
+            let diskOverrides = {};
+            try {
+                const resFixes = await fetch('camera_fixes.json');
+                if (resFixes.ok) {
+                    diskOverrides = await resFixes.json();
+                    console.log("Loaded permanent fixes from disk:", Object.keys(diskOverrides).length);
+                }
+            } catch (e) { console.log("No partial fixes file found (camera_fixes.json)."); }
+
+            // 2. Load LocalStorage Overrides (User's browser session)
+            const localOverrides = JSON.parse(localStorage.getItem('camera_edit_overrides') || '{}');
+
+            // 3. Merge: LocalStorage takes precedence over Disk (so user can edit on top of fixes)
+            const allOverrides = { ...diskOverrides, ...localOverrides };
+
+            // Apply
             cameras.forEach(c => {
-                if (overrides[c.id]) {
-                    if (typeof overrides[c.id].direction !== 'undefined') {
-                        c.direction = overrides[c.id].direction;
+                if (allOverrides[c.id]) {
+                    if (typeof allOverrides[c.id].direction !== 'undefined') {
+                        c.direction = allOverrides[c.id].direction;
                         c.isModified = true; // Flag for UI
                     }
                 }
@@ -890,7 +905,7 @@
             // 判定為 HIGHWAY 若路名包含特定關鍵字 或 速限 >= 80
             if (cam.limit >= 80) return ROAD_CONTEXT.HIGHWAY;
             if (roadName) {
-                const signs = ['國道', '快速', '高速', '高架'];
+                const signs = ['國道', '快速公路', '快速道路', '高速公路', '高架'];
                 if (signs.some(s => roadName.includes(s))) return ROAD_CONTEXT.HIGHWAY;
             }
             return ROAD_CONTEXT.CITY;
