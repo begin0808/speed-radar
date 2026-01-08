@@ -367,6 +367,8 @@
         };
         let lastUserInteractionTime = 0;
         let isUserInteracting = false;
+        // Fix: Move interactedCameras to top-level to avoid "before initialization" errors
+        const interactedCameras = new Map();
 
         const BeepManager = {
             audioCtx: null,
@@ -1019,7 +1021,7 @@
         }
 
         // State Machine for Alerts
-        const interactedCameras = new Map();
+        // const interactedCameras = new Map(); // Moved to top-level
 
         function checkProximity(lat, lng, speed = 0, heading = null) {
             try { // Protection against crashes stopping UI updates
