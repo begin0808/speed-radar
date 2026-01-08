@@ -850,17 +850,9 @@
             });
         }
 
-        // Monitor Zoom for Dynamic Sizing
-        map.on('zoomend', () => {
-            renderCameras();
-        });
-
-        // 1. Auto-close Popup (6 sec)
-        map.on('popupopen', function (e) {
-            setTimeout(() => {
-                map.closePopup();
-            }, 6000);
-        });
+        // Monitor Zoom for Dynamic Sizing moved to initMap
+        // map.on('zoomend', ... moved);
+        // map.on('popupopen', ... moved);
 
 
         async function fetchRoadName(lat, lng) {
