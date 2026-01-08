@@ -1347,7 +1347,7 @@
                     // Red Alert Logic (Priority)
                     if (speed > cam.limit) {
                         shouldShowOverlay = true;
-                        shouldFlash = true; // 閃爍3秒
+                        shouldFlash = true; // 閃爍5秒 (修正: 3s -> 5s)
                         msgText = `⚠️ 限速 ${cam.limit}`;
                         msgColorClass = "text-red-400";
                         overlayColor = 'rgba(220, 38, 38, 1)'; // Red
@@ -1370,9 +1370,9 @@
                         interactedCameras.set(cam.id, state);
                     }
 
-                    // Flash for 3 seconds
+                    // Flash for 5 seconds (修正: 3s -> 5s)
                     const elapsedWarn = Date.now() - state.warnFlashStartTime;
-                    if (elapsedWarn < 3000) {
+                    if (elapsedWarn < 5000) {
                         shouldShowOverlay = true;
                         shouldFlash = true;
                         overlayColor = 'rgba(234, 179, 8, 1)'; // Yellow-500 (#eab308)
@@ -1396,12 +1396,12 @@
                         interactedCameras.set(cam.id, state);
                     }
                     const elapsed = Date.now() - state.flashStartTime;
-                    if (elapsed < 3000) {
+                    if (elapsed < 5000) { // 修正: 5s
                         alertOverlay.style.display = 'block';
                         alertOverlay.style.animation = 'pulse 0.8s infinite';
                     } else {
-                        // After 3s Red: Static Red Border
-                        alertOverlay.style.display = 'block';
+                        // 修正: 拿掉恆亮規則。超過5秒後，不再顯示外框。
+                        alertOverlay.style.display = 'none';
                         alertOverlay.style.animation = 'none';
                     }
                 } else {
@@ -1440,8 +1440,8 @@
             // Stage 1: Warn (預警)
             if ((confidence === CONFIDENCE.HIGH || confidence === CONFIDENCE.MEDIUM) && dist <= thresholds.warnDist && dist > thresholds.alertDist) {
                 if (state.maxStage < 1) {
-                    const txt = (context === ROAD_CONTEXT.HIGHWAY) ?
-                        `前方測速照相，限速${cam.limit}` : `前方測速，限速${cam.limit}`;
+                    // 修正: 統一為「前方測速照相，限速XX」
+                    const txt = `前方測速照相，限速${cam.limit}`;
                     speak(txt);
                     state.maxStage = 1;
                 }
@@ -1450,23 +1450,16 @@
             // Stage 2: Alert (緊急)
             if (dist <= thresholds.alertDist && dist > thresholds.passDist) {
                 if (confidence === CONFIDENCE.HIGH || confidence === CONFIDENCE.MEDIUM) {
-                    if (speed > cam.limit) {
+
+                    // Unified Logic for Stage 2 Voice
+                    let shouldSpeak = false;
+                    if (speed > cam.limit) shouldSpeak = true;
+                    else if (speed >= 10) shouldSpeak = true; // Simply trigger for any significant speed
+
+                    if (shouldSpeak) {
                         if (state.maxStage < 2) {
-                            const txt = (context === ROAD_CONTEXT.HIGHWAY) ?
-                                `減速，限速${cam.limit}` : `注意，限速${cam.limit}`;
-                            speak(txt);
-                            state.maxStage = 2;
-                        }
-                    } else if (context === ROAD_CONTEXT.CITY && speed >= 10) {
-                        if (state.maxStage < 2) {
-                            speak(`前方測速`);
-                            state.maxStage = 2;
-                        }
-                    } else if (speed >= 20) { // Medium confidence specific logic, now merged
-                        if (state.maxStage < 2) {
-                            const txt = (context === ROAD_CONTEXT.HIGHWAY) ?
-                                `注意，疑似測速照相` : `注意，前方可能有測速`;
-                            speak(txt);
+                            // 修正: 統一為「注意，限速XX」
+                            speak(`注意，限速${cam.limit}`);
                             state.maxStage = 2;
                         }
                     }
