@@ -1336,21 +1336,22 @@
             let shouldFlash = false;
             let msgText = "";
             let msgColorClass = "text-yellow-300";
+            let overlayColor = 'rgba(220, 38, 38, 1)'; // Default Red
 
             let state = interactedCameras.get(cam.id) || { maxStage: 0 };
 
-            // High Confidence Visuals
             // High & Medium Confidence Visuals (Merged Logic as per User Request)
             if (confidence === CONFIDENCE.HIGH || confidence === CONFIDENCE.MEDIUM) {
                 // Stage 2: Alert (緊急)
                 if (dist <= thresholds.alertDist && dist > thresholds.passDist) {
+                    // Red Alert Logic (Priority)
                     if (speed > cam.limit) {
                         shouldShowOverlay = true;
                         shouldFlash = true; // 閃爍3秒
                         msgText = `⚠️ 限速 ${cam.limit}`;
                         msgColorClass = "text-red-400";
+                        overlayColor = 'rgba(220, 38, 38, 1)'; // Red
                     } else if (context === ROAD_CONTEXT.CITY && speed >= 10) {
-                        // 市區未超速但有一定速度 -> 紅字無框
                         msgText = `限速 ${cam.limit}`;
                         msgColorClass = "text-red-400";
                     } else if (context === ROAD_CONTEXT.HIGHWAY) {
@@ -1361,37 +1362,64 @@
                 // Stage 1: Warn (預警)
                 else if (dist <= thresholds.warnDist) {
                     msgText = `🔔 前方測速`;
+
+                    // Yellow Warning Flash Logic (New Request)
+                    // Trigger: First entry into Warn state
+                    if (!state.warnFlashStartTime) {
+                        state.warnFlashStartTime = Date.now();
+                        interactedCameras.set(cam.id, state);
+                    }
+
+                    // Flash for 3 seconds
+                    const elapsedWarn = Date.now() - state.warnFlashStartTime;
+                    if (elapsedWarn < 3000) {
+                        shouldShowOverlay = true;
+                        shouldFlash = true;
+                        overlayColor = 'rgba(234, 179, 8, 1)'; // Yellow-500 (#eab308)
+                    }
                 }
             }
 
             // Apply Overlay
-            // 規則: "紅色邊框並閃爍三秒"
-            // 我們這裡簡化為只要在條件內就顯示。若要精確 "只閃3秒然後停"，需要記錄時間。
-            // 之前的實作有 flashStartTime，這裡沿用。
             if (shouldFlash) {
-                if (!state.flashStartTime) {
-                    state.flashStartTime = Date.now();
-                    interactedCameras.set(cam.id, state);
-                }
-                const elapsed = Date.now() - state.flashStartTime;
-                if (elapsed < 3000) {
+                let startTimeKey = 'flashStartTime'; // Default Red Flash Timer
+                if (overlayColor.includes('234')) startTimeKey = 'warnFlashStart_INTERNAL'; // Hack: Don't use Red Timer for Yellow
+
+                // Wait, logic needs to be robust. 
+                // For Red Flash (Speeding), we use `state.flashStartTime`.
+                // For Yellow Flash, we use `state.warnFlashStartTime` which is already set above.
+
+                // Red Flash Logic uses `state.flashStartTime`.
+                if (overlayColor.includes('220')) { // Red
+                    if (!state.flashStartTime) {
+                        state.flashStartTime = Date.now();
+                        interactedCameras.set(cam.id, state);
+                    }
+                    const elapsed = Date.now() - state.flashStartTime;
+                    if (elapsed < 3000) {
+                        alertOverlay.style.display = 'block';
+                        alertOverlay.style.animation = 'pulse 0.8s infinite';
+                    } else {
+                        // After 3s Red: Static Red Border
+                        alertOverlay.style.display = 'block';
+                        alertOverlay.style.animation = 'none';
+                    }
+                } else {
+                    // Yellow Flash (Already filtered by time < 3000 above)
                     alertOverlay.style.display = 'block';
                     alertOverlay.style.animation = 'pulse 0.8s infinite';
-                } else {
-                    // 超過3秒，顯示紅框但不閃? 規則沒說，通常是恆亮或消失。
-                    // 假設恆亮提醒
-                    alertOverlay.style.display = 'block';
-                    alertOverlay.style.animation = 'none';
                 }
-                alertOverlay.style.borderColor = 'rgba(220, 38, 38, 1)';
+
+                alertOverlay.style.borderColor = overlayColor;
+
             } else if (shouldShowOverlay) {
-                // 純紅框 (未定義此狀態，但為了安全)
+                // Static Overlay (e.g. Red non-flashing if implemented later, or fallthrough)
                 alertOverlay.style.display = 'block';
                 alertOverlay.style.animation = 'none';
+                alertOverlay.style.borderColor = overlayColor;
             } else {
                 alertOverlay.style.display = 'none';
-                // Reset flash timer if we exit flash condition? 
-                // 為了避免反覆觸發，通常不Reset，除非 ResetDist.
+                // Note: We don't reset timers here to avoid re-triggering on same pass
             }
 
             // Apply Message Box
