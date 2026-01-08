@@ -287,7 +287,7 @@
                 偵測中...
             </div>
             <div class="text-[10px] text-yellow-500 mt-1 truncate" id="detection-debug-info">
-                等待移動...
+                GPS 待命...
             </div>
         </div>
 
@@ -583,7 +583,8 @@
                                     limit: limitVal,
                                     direction: parseChiDirection(item.direction),
                                     direct: item.direction || '雙向',
-                                    address: item.google_formatted_address || (item.district + item.location),
+                                    // Fix: Append location to address to ensure Road Name Matching works (e.g. "Zhonghua East Road")
+                                    address: (item.google_formatted_address || item.district) + " " + item.location,
                                     sourceType: 'tainan_extra'
                                 });
                                 addedCount++;
@@ -1085,12 +1086,10 @@
                     // Medium Confidence 修正:
                     // User Rule: "中信任...車輛距離...進入緊急距離範圍內"
                     // 若還沒進緊急距離，僅視為 Low (忽略)? 或者保持 Low 直到進入?
-                    if (confidence === CONFIDENCE.MEDIUM) {
-                        if (dist > th.alertDist) {
-                            // 尚未進入緊急區，即使幾何符合路名不符 -> 仍視為 Low (不預警)
-                            continue;
-                        }
-                    }
+                    // Medium Confidence Logic Update (User Request):
+                    // No strict distance filter here. We want it to behave like High Conf (Warn at 300m).
+                    // We will handle the "Speed > 20" requirement in updateUI/Voice.
+                    // if (confidence === CONFIDENCE.MEDIUM) { ... } -> Removed.
 
                     // 找出最優先的 Threat
                     // 優先順序: High Conf > Medium Conf
@@ -1133,7 +1132,12 @@
 
             } catch (err) {
                 console.error("checkProximity Error:", err);
-                // Fallback: still update speed
+                // Fail-safe UI update
+                const debugEl = document.getElementById('detection-debug-info');
+                if (debugEl) {
+                    debugEl.innerText = "系統偵測錯誤";
+                    debugEl.className = "text-[10px] text-red-500 mt-1 truncate";
+                }
                 updateUI(Infinity, null, speed, null);
             }
         }
@@ -1366,10 +1370,17 @@
             }
             // Medium Confidence Visuals
             else if (confidence === CONFIDENCE.MEDIUM) {
-                if (dist <= thresholds.alertDist && speed > cam.limit) {
-                    const txt = (context === ROAD_CONTEXT.HIGHWAY) ? "疑似測速" : "可能有測速";
-                    msgText = `⚠️ ${txt}`;
-                    msgColorClass = "text-red-400";
+                // User Request: "Speed > 20" triggers alert regardless of limit. matches High Conf distance.
+                // Distance logic is handled by thresholds (Warn vs Alert).
+                if (speed >= 20) {
+                    if (dist <= thresholds.alertDist) {
+                        const txt = (context === ROAD_CONTEXT.HIGHWAY) ? "疑似測速" : "可能有測速";
+                        msgText = `⚠️ ${txt}`;
+                        msgColorClass = "text-yellow-300"; // Changed to Yellow as it's "check" not "confirmed limit" ? Or Red for Alert? User said "Alert". Let's stick to Yellow-300 for "Caution"
+                        shouldShowOverlay = true; // Show frame
+                    } else if (dist <= thresholds.warnDist) {
+                        msgText = `🔔 可能有測速`;
+                    }
                 }
             }
 
@@ -1445,12 +1456,15 @@
                         }
                     }
                 }
-                else if (confidence === CONFIDENCE.MEDIUM && speed > cam.limit) {
-                    if (state.maxStage < 2) { // 使用 Stage 2 作為中信任的觸發標記
-                        const txt = (context === ROAD_CONTEXT.HIGHWAY) ?
-                            `注意，疑似測速照相` : `注意，前方可能有測速`;
-                        speak(txt);
-                        state.maxStage = 2;
+                else if (confidence === CONFIDENCE.MEDIUM) {
+                    // User Request: Speed > 20, regardless of limit
+                    if (speed >= 20) {
+                        if (state.maxStage < 2) {
+                            const txt = (context === ROAD_CONTEXT.HIGHWAY) ?
+                                `注意，疑似測速照相` : `注意，前方可能有測速`;
+                            speak(txt);
+                            state.maxStage = 2;
+                        }
                     }
                 }
             }
