@@ -1135,7 +1135,7 @@
                 // Fail-safe UI update
                 const debugEl = document.getElementById('detection-debug-info');
                 if (debugEl) {
-                    debugEl.innerText = "系統偵測錯誤";
+                    debugEl.innerText = "Err: " + (err.message || err);
                     debugEl.className = "text-[10px] text-red-500 mt-1 truncate";
                 }
                 updateUI(Infinity, null, speed, null);
@@ -1346,12 +1346,13 @@
             let state = interactedCameras.get(cam.id) || { maxStage: 0 };
 
             // High Confidence Visuals
-            if (confidence === CONFIDENCE.HIGH) {
+            // High & Medium Confidence Visuals (Merged Logic as per User Request)
+            if (confidence === CONFIDENCE.HIGH || confidence === CONFIDENCE.MEDIUM) {
                 // Stage 2: Alert (緊急)
                 if (dist <= thresholds.alertDist && dist > thresholds.passDist) {
                     if (speed > cam.limit) {
                         shouldShowOverlay = true;
-                        shouldFlash = true; // 閃爍3秒 (由CSS animation控制, JS只開關class)
+                        shouldFlash = true; // 閃爍3秒
                         msgText = `⚠️ 限速 ${cam.limit}`;
                         msgColorClass = "text-red-400";
                     } else if (context === ROAD_CONTEXT.CITY && speed >= 10) {
@@ -1366,21 +1367,6 @@
                 // Stage 1: Warn (預警)
                 else if (dist <= thresholds.warnDist) {
                     msgText = `🔔 前方測速`;
-                }
-            }
-            // Medium Confidence Visuals
-            else if (confidence === CONFIDENCE.MEDIUM) {
-                // User Request: "Speed > 20" triggers alert regardless of limit. matches High Conf distance.
-                // Distance logic is handled by thresholds (Warn vs Alert).
-                if (speed >= 20) {
-                    if (dist <= thresholds.alertDist) {
-                        const txt = (context === ROAD_CONTEXT.HIGHWAY) ? "疑似測速" : "可能有測速";
-                        msgText = `⚠️ ${txt}`;
-                        msgColorClass = "text-yellow-300"; // Changed to Yellow as it's "check" not "confirmed limit" ? Or Red for Alert? User said "Alert". Let's stick to Yellow-300 for "Caution"
-                        shouldShowOverlay = true; // Show frame
-                    } else if (dist <= thresholds.warnDist) {
-                        msgText = `🔔 可能有測速`;
-                    }
                 }
             }
 
@@ -1430,7 +1416,7 @@
             let state = interactedCameras.get(cam.id) || { maxStage: 0, lastSeen: 0, flashStartTime: 0 };
 
             // Stage 1: Warn (預警)
-            if (confidence === CONFIDENCE.HIGH && dist <= thresholds.warnDist && dist > thresholds.alertDist) {
+            if ((confidence === CONFIDENCE.HIGH || confidence === CONFIDENCE.MEDIUM) && dist <= thresholds.warnDist && dist > thresholds.alertDist) {
                 if (state.maxStage < 1) {
                     const txt = (context === ROAD_CONTEXT.HIGHWAY) ?
                         `前方測速照相，限速${cam.limit}` : `前方測速，限速${cam.limit}`;
@@ -1441,7 +1427,7 @@
 
             // Stage 2: Alert (緊急)
             if (dist <= thresholds.alertDist && dist > thresholds.passDist) {
-                if (confidence === CONFIDENCE.HIGH) {
+                if (confidence === CONFIDENCE.HIGH || confidence === CONFIDENCE.MEDIUM) {
                     if (speed > cam.limit) {
                         if (state.maxStage < 2) {
                             const txt = (context === ROAD_CONTEXT.HIGHWAY) ?
@@ -1454,11 +1440,7 @@
                             speak(`前方測速`);
                             state.maxStage = 2;
                         }
-                    }
-                }
-                else if (confidence === CONFIDENCE.MEDIUM) {
-                    // User Request: Speed > 20, regardless of limit
-                    if (speed >= 20) {
+                    } else if (speed >= 20) { // Medium confidence specific logic, now merged
                         if (state.maxStage < 2) {
                             const txt = (context === ROAD_CONTEXT.HIGHWAY) ?
                                 `注意，疑似測速照相` : `注意，前方可能有測速`;
@@ -1471,7 +1453,9 @@
 
             // Stage 3: Pass (通過) - Beep Only
             // High Confidence Only (Rules impl: Medium Conf only has Alert triggers)
-            if (confidence === CONFIDENCE.HIGH && dist <= thresholds.passDist) {
+            // Stage 3: Pass (通過) - Beep Only
+            // High & Medium Confidence (Merged Logic)
+            if ((confidence === CONFIDENCE.HIGH || confidence === CONFIDENCE.MEDIUM) && dist <= thresholds.passDist) {
                 if (context === ROAD_CONTEXT.HIGHWAY) {
                     // 高速: 超速->連續嗶; 未超速->單次嗶
                     if (speed > cam.limit) {
