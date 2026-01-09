@@ -175,9 +175,9 @@
         }
 
         .gps-marker-dot {
-            background: #3B82F6;
-            width: 18px;
-            height: 18px;
+            background: #EF4444;
+            width: 22px;
+            height: 22px;
             border-radius: 50%;
             border: 2px solid white;
             animation: pulse-gps 2s infinite;
@@ -512,7 +512,7 @@
                 className: 'custom-car',
                 // Smaller size (18px) with new pulse animation class
                 html: `<div class="gps-marker-dot"></div>`,
-                iconSize: [20, 20], iconAnchor: [10, 10]
+                iconSize: [24, 24], iconAnchor: [12, 12]
             });
             userMarker = L.marker([currentPos.lat, currentPos.lng], { icon: carIcon, zIndexOffset: 1000 }).addTo(map);
         }
@@ -792,14 +792,14 @@
                     L.polygon([center, p1, p2], {
                         color: 'transparent', // No border
                         fillColor: '#9333ea', // Purple-600 Strong Purple
-                        fillOpacity: 1.0, // Opaque as requested
+                        fillOpacity: 0.4, // Semi-transparent as requested
                         weight: 0,
                         interactive: false
                     }).addTo(markersLayer);
                 }
 
                 // Default: Red
-                let iconBgClass = "bg-red-600";
+                let iconBgClass = "bg-orange-500";
 
                 if (isTainan) {
                     // Refinement 3: Yellow -> Yellow-Green (Lime) & No Arrow (Ensured)
