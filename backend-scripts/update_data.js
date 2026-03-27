@@ -87,15 +87,49 @@ async function main() {
     } else {
         // 如果沒有本地檔案，才去網路下載
         console.log(`🌐 本地無資料 (${localCsvPath})，正在從政府開放平台下載...`);
+        console.log(`🔗 URL: ${CSV_URL}`);
+        
         const response = await axios({
             method: 'get',
             url: CSV_URL,
-            responseType: 'stream',
+            responseType: 'arraybuffer', // 先抓原始 Buffer 處理編碼
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': '*/*'
+            },
+            timeout: 30000 // 增加逾時設定
         });
-        stream = response.data.pipe(iconv.decodeStream('utf-8')).pipe(csv());
+
+        console.log(`📊 下載完成，狀態碼: ${response.status}, 長度: ${response.data.length} bytes`);
+        
+        const buffer = Buffer.from(response.data);
+        // 如果前幾個 byte 像 HTML，可能是被擋或導向錯誤頁面
+        if (buffer.toString('utf-8', 0, 100).includes('<!DOCTYPE html>')) {
+            console.error('❌ 錯誤：下載到的是 HTML 網頁而非 CSV，可能是被政府 API 跳轉或封鎖。');
+            console.log('內容開頭：', buffer.toString('utf-8', 0, 200));
+            process.exit(1);
+        }
+
+        // 自動偵測 UTF-8 (含 BOM) 或 Big5
+        let decodedContent;
+        if (buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {
+            console.log('📝 偵測到 UTF-8 BOM');
+            decodedContent = iconv.decode(buffer, 'utf-8');
+        } else {
+            // 嘗試偵測編碼 (簡單判斷)
+            const utf8Test = buffer.toString('utf8');
+            if (utf8Test.includes('設置') || utf8Test.includes('Address') || utf8Test.includes('CityName')) {
+                console.log('📝 偵測為 UTF-8');
+                decodedContent = utf8Test;
+            } else {
+                console.log('📝 嘗試解析為 Big5 (政府常見編碼)');
+                decodedContent = iconv.decode(buffer, 'big5');
+            }
+        }
+        
+        // 將字串轉回 Stream 給 csv-parser
+        const { Readable } = await import('stream');
+        stream = Readable.from([decodedContent]).pipe(csv());
     }
 
     const cameras = [];
@@ -159,6 +193,10 @@ async function main() {
 
   } catch (error) {
     console.error('❌ 發生錯誤:', error.message);
+    if (error.response) {
+        console.error('  狀態碼:', error.response.status);
+        console.error('  內容開頭:', error.response.data.toString().substring(0, 500));
+    }
     process.exit(1);
   }
 }
