@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小企鵝超速雷達</title>
+    <style>
+        :root {
+            --bg-color: #2b2b2b;
+            --card-bg: #373737;
+            --primary-color: #ffa000;
+            --primary-hover: #ffb300;
+            --accent-blue: #448aff;
+            --accent-purple: #e040fb;
+            --accent-green: #69f0ae;
+            --accent-cyan: #18ffff;
+            --accent-indigo: #7c4dff;
+            --text-main: #ffffff;
+            --text-muted: #bdbdbd;
+            --accent-red: #ff5252;
+        }
+
+        body {
+            font-family: "Microsoft JhengHei", "Segoe UI", sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            line-height: 1.5;
+            font-size: 15px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Header */
+        header {
+            text-align: center;
+            padding: 30px 0;
+            background: linear-gradient(180deg, #1a1a1a 0%, #2b2b2b 100%);
+            border-bottom: 1px solid #444;
+        }
+
+        .logo-area {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 5px;
+        }
+
+        .app-icon {
+            font-size: 40px;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin: 0;
+            color: var(--primary-color);
+            letter-spacing: 1px;
+        }
+
+        .subtitle {
+            font-size: 0.95em;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .header-link {
+            display: inline-block;
+            margin-top: 10px;
+            color: var(--primary-color);
+            text-decoration: none;
+            font-size: 0.9em;
+            border: 1px solid var(--primary-color);
+            padding: 4px 12px;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .header-link:hover {
+            background-color: var(--primary-color);
+            color: #000;
+        }
+
+        /* Sections */
+        .section {
+            margin: 25px 0;
+        }
+
+        h2 {
+            border-left: 5px solid var(--primary-color);
+            padding-left: 12px;
+            font-size: 1.4em;
+            margin: 0 0 15px 0;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Section Variation Colors */
+        .sec-features h2 { border-color: var(--primary-color); }
+        .sec-how-to h2 { border-color: var(--accent-blue); }
+        .sec-logic h2 { border-color: var(--accent-purple); }
+        .sec-tech h2 { border-color: var(--accent-green); }
+        .sec-pwa h2 { border-color: var(--accent-cyan); }
+        .sec-faq h2 { border-color: var(--accent-indigo); }
+
+        .sec-how-to .step-number { background-color: var(--accent-blue); }
+        .sec-logic .tech-item strong { color: var(--accent-purple); }
+        .sec-tech .tech-item strong { color: var(--accent-green); }
+        .sec-pwa h3 { color: var(--accent-cyan) !important; }
+        .sec-pwa .steps-container { border-color: rgba(24, 255, 255, 0.2); }
+        .sec-faq .faq-question { color: var(--accent-indigo); }
+
+        /* Features Grid */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 15px;
+        }
+
+        .feature-card {
+            background-color: var(--card-bg);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #484848;
+            transition: all 0.2s;
+        }
+
+        .feature-card:hover {
+            border-color: var(--primary-color);
+            background-color: #3e3e3e;
+        }
+
+        .feature-card h3 {
+            color: var(--primary-color);
+            margin: 0 0 8px 0;
+            font-size: 1.1em;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .feature-card p {
+            margin: 0;
+            font-size: 0.9em;
+            color: #ececec;
+            line-height: 1.4;
+        }
+
+        /* Steps */
+        .steps-container {
+            background-color: var(--card-bg);
+            border-radius: 12px;
+            padding: 5px 15px;
+            border: 1px solid #484848;
+        }
+
+        .step {
+            display: flex;
+            align-items: flex-start;
+            padding: 12px 0;
+            border-bottom: 1px solid #484848;
+        }
+
+        .step:last-child {
+            border-bottom: none;
+        }
+
+        .step-number {
+            background-color: var(--primary-color);
+            color: #000;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 0.85em;
+            margin-right: 12px;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        .step-content h3 {
+            margin: 0 0 3px 0;
+            font-size: 1.05em;
+            color: #fff;
+        }
+
+        .step-content p {
+            margin: 0;
+            font-size: 0.9em;
+            color: var(--text-muted);
+        }
+
+        /* Tech Specs List */
+        .tech-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .tech-item {
+            background-color: rgba(255, 160, 0, 0.05);
+            border-radius: 6px;
+            padding: 10px 15px;
+            margin-bottom: 8px;
+            border: 1px dashed rgba(255, 160, 0, 0.2);
+        }
+
+        .tech-item strong {
+            color: var(--primary-color);
+            display: block;
+            margin-bottom: 2px;
+            font-size: 0.95em;
+        }
+
+        .tech-item span {
+            font-size: 0.85em;
+            color: var(--text-muted);
+        }
+
+        /* FAQ */
+        .faq-item {
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #444;
+        }
+
+        .faq-question {
+            font-weight: bold;
+            font-size: 1em;
+            color: var(--primary-color);
+            margin-bottom: 3px;
+        }
+
+        .faq-answer {
+            font-size: 0.9em;
+            color: #d1d1d1;
+        }
+
+        /* Disclaimer */
+        .disclaimer {
+            border-left: 5px solid var(--accent-red);
+            background-color: rgba(255, 82, 82, 0.1);
+            padding: 12px 15px;
+            border-radius: 6px;
+            margin-top: 30px;
+        }
+
+        .disclaimer h4 {
+            color: var(--accent-red);
+            margin: 0 0 5px 0;
+            font-size: 1.1em;
+        }
+
+        .disclaimer p {
+            margin: 0;
+            font-size: 0.85em;
+            color: #ddd;
+        }
+
+        footer {
+            text-align: center;
+            padding: 20px 0;
+            color: var(--text-muted);
+            border-top: 1px solid #444;
+            margin-top: 30px;
+            font-size: 0.85em;
+        }
+
+        @media (max-width: 600px) {
+            h1 { font-size: 20px; }
+            h2 { font-size: 1.2em; }
+            .container { padding: 10px; }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo-area">
+            <span class="app-icon">🐧</span>
+            <h1>小企鵝超速雷達 (GPS Safe Check)</h1>
+        </div>
+        <div class="subtitle">專業級測速預警系統 • 行車安全的智慧守護者</div>
+        <a href="https://begin0808.github.io/speed-radar/" class="header-link" target="_blank">🚀 立即啟動應用程式</a>
+    </header>
+
+    <div class="container">
+
+        <!-- Features -->
+        <div class="section sec-features">
+            <h2>核心功能 Features</h2>
+            <div class="features">
+                <div class="feature-card">
+                    <h3>📡 實時衛星定位</h3>
+                    <p>利用高頻率 GPS 取樣技術，毫秒級同步車輛座標與行駛速度，確保預警零時差。</p>
+                </div>
+                <div class="feature-card">
+                    <h3>📢 多級語音提醒</h3>
+                    <p>智慧判斷距離，自動觸發 500m/200m 漸進式語音警示，專為駕駛者設計的盲導體驗。</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🎯 精準方向判定</h3>
+                    <p>獨家夾角演算法，精確區分同向與對向車道，僅針對目前行駛路徑之相機發出警訊。</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🌍 雙重數據來源</h3>
+                    <p>整合內建全台測速資料庫與台南市警察局交通隊的測速照相機為擴充數據。</p>
+                </div>
+                <div class="feature-card">
+                    <h3>⚡ PWA 技術支援</h3>
+                    <p>支援離線運行與「加入主畫面」安裝，享有原生 App 般的流暢與背景執行能力。</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🛠️ 社群修正機制</h3>
+                    <p>開放使用者手動調整相機朝向角度，支援 JSON 格式匯出修正檔。使用者可將檔案回報給開發者 (begin0808@gmail.com)，實現社群數據共生。</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- How to Use -->
+        <div class="section sec-how-to">
+            <h2>操作指南 How to Use</h2>
+            <div class="steps-container">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h3>啟動應用</h3>
+                        <p>使用行動裝置瀏覽器開啟網址，並授予「位置資訊 (GPS)」與「自動播放音訊」權限。</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h3>加入主畫面 (推薦)</h3>
+                        <p>iOS 使用「分享 -> 加入主畫面」；Android 點擊「菜單 -> 安裝應用」，提升穩定度。</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h3>開始巡航</h3>
+                        <p>點擊「🚀 開始使用」，系統會自動鎖定螢幕衡亮 (Wake Lock)，進入監控狀態。</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">4</div>
+                    <div class="step-content">
+                        <h3>修正與回報</h3>
+                        <p>左上角可切換語音開關與「匯出修正檔」。請使用者將取得的 JSON 檔案傳送給開發者 (begin0808@gmail.com)，以便更新主程式資料庫。</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Logic V2.0 -->
+        <div class="section sec-logic">
+            <h2>預警邏輯 Logic V2.0</h2>
+            <div class="tech-list">
+                <div class="tech-item">
+                    <strong>1. 動態預警距離 (Dynamic Thresholds)</strong>
+                    <span>系統依據道路環境與即時車速自動計算：<br>
+                    • <b>市區道路</b>：300m 起跳 (最大 500m)，針對低速環境優化。<br>
+                    • <b>高速/快速公路</b>：500m 起跳 (最大 800m)，確保高速行駛時有充足反應時間。</span>
+                </div>
+                <div class="tech-item">
+                    <strong>2. 智慧信任分級 (Confidence Model)</strong>
+                    <span>避免誤報的核心技術：<br>
+                    • <b>高信任 (High)</b>：路名完全匹配，警示最精準。<br>
+                    • <b>中信任 (Medium)</b>：進入 20 度扇形監控區，且方向角誤差小於 20 度。<br>
+                    • <b>低信任 (Low)</b>：非行進路徑之相機，系統自動過濾不報警。</span>
+                </div>
+                <div class="tech-item">
+                    <strong>3. 漸進式語音階段 (Voice Alert Stages)</strong>
+                    <span>二段式提醒確保駕駛注意力：<br>
+                    • <b>預警階段</b>：播報「前方測速照相，限速 XX」，提供心理準備。<br>
+                    • <b>緊急階段</b>：距離進入 120m-200m 內，播報「注意，限速 XX」強調危險。</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tech Details -->
+        <div class="section sec-tech">
+            <h2>技術架構 Technical Details</h2>
+            <div class="tech-list">
+                <div class="tech-item">
+                    <strong>空間網格索引 (Spatial Grid Index)</strong>
+                    <span>採用 0.02 經緯度單位的網格檢索系統，在大數據量下依然能快速尋找週邊相機。</span>
+                </div>
+                <div class="tech-item">
+                    <strong>指向性辨識演算 (Orientation Logic)</strong>
+                    <span>結合相機角度 (Direction) 與車輛方位角 (Bearing)，有效解決路口多向誤報問題。</span>
+                </div>
+                <div class="tech-item">
+                    <strong>螢幕恆亮機制 (Wake Lock API)</strong>
+                    <span>整合現代瀏覽器 Wake Lock 技術，解決手機充電/導航中自動進入休眠的困擾。</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- PWA Guide -->
+        <div class="section sec-pwa">
+            <h2>PWA 技術與安裝建議 Installation Guide</h2>
+            <div class="steps-container" style="background-color: rgba(255, 160, 0, 0.03); padding: 15px;">
+                <p style="margin-top: 0;">在「小企鵝超速雷達」中採用 <b>PWA (Progressive Web App)</b> 技術，是為了讓網頁能達到接近手機原生 App 的使用體驗。</p>
+                
+                <h3 style="color: var(--primary-color); font-size: 1.1em; margin: 15px 0 8px 0;">什麼是 PWA 技術？</h3>
+                <p style="font-size: 0.9em; margin-bottom: 15px;">簡單來說，PWA 就是「披著網頁外衣的 App」。它具備以下特點：</p>
+                <ul style="font-size: 0.9em; color: var(--text-muted); padding-left: 20px;">
+                    <li style="margin-bottom: 5px;"><strong style="color: #fff;">可離線執行</strong>：透過 Service Worker 技術將資源暫存在手機，確保收訊差時程式不毀損。</li>
+                    <li style="margin-bottom: 5px;"><strong style="color: #fff;">無邊框體驗</strong>：加入主畫面後自動隱藏網址列，導航畫面更寬廣專業。</li>
+                    <li><strong style="color: #fff;">背景執行優化</strong>：更穩定地申請螢幕恆亮，防止導航途中手機自動進入休眠。</li>
+                </ul>
+
+                <h3 style="color: var(--primary-color); font-size: 1.1em; margin: 15px 0 8px 0;">一定要「安裝」嗎？</h3>
+                <p style="font-size: 0.9em;"><b>不一定，但強烈建議安裝。</b></p>
+                
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; margin-top: 10px;">
+                    <div style="border: 1px solid #444; padding: 12px; border-radius: 8px;">
+                        <strong style="display: block; margin-bottom: 5px; color: #bdbdbd;">若不安裝 (瀏覽器開啟)</strong>
+                        <span style="font-size: 0.85em; color: #888;">仍可播報與定位，但網址列佔空間；且切換分頁時 GPS 易被系統自動中斷以節能。</span>
+                    </div>
+                    <div style="border: 1px solid var(--primary-color); padding: 12px; border-radius: 8px;">
+                        <strong style="display: block; margin-bottom: 5px; color: var(--primary-color);">若安裝 (加入主畫面)</strong>
+                        <span style="font-size: 0.85em; color: #ececec;">像獨立 App 圖示在桌面。執行最穩定，且能維持較高系統權限，確保背景 GPS 運作最流暢。</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- FAQ -->
+        <div class="section sec-faq">
+            <h2>常見問題 FAQ</h2>
+            <div class="faq-item">
+                <div class="faq-question">Q: 為什麼 GPS 提示「未啟動」或位置不準？</div>
+                <div class="faq-answer">A: 請確認手機的「定位服務」已開啟，並將瀏覽器的地址位置權限設為「允許」。室內可能導致信號微弱，建議到戶外開闊處測試。</div>
+            </div>
+            <div class="faq-item">
+                <div class="faq-question">Q: 網頁版聲音一定要手動才能開啟嗎？</div>
+                <div class="faq-answer">A: 是的，根據現代瀏覽器安全規範，網頁必須在使用者進行第一次手動互動（如點擊「開始」）後，才能解鎖背景播放權限。</div>
+            </div>
+            <div class="faq-item">
+                <div class="faq-question">Q: 如何修正錯誤的測速點？</div>
+                <div class="faq-answer">A: 點擊地圖上的相機圖標，使用彈出視窗中的箭頭微調指向，最後點擊左側「匯出修正」並將 JSON 檔提供給開發者 (begin0808@gmail.com) 即可。</div>
+            </div>
+            <div class="faq-item">
+                <div class="faq-question">Q: 支援背景執行嗎？</div>
+                <div class="faq-answer">A: 作為 PWA 應用，若將其加入主畫面，在螢幕關閉或切換分頁時，只要音訊與 GPS 保持 Active 狀態，仍能提供基礎語音預警。</div>
+            </div>
+        </div>
+
+        <!-- Disclaimer -->
+        <div class="disclaimer">
+            <h4>⚠️ 免責聲明</h4>
+            <p>本系統所提供之測速照相資訊僅供參考，系統預警可能因 GPS 誤差、地圖數據更新延遲或網路問題而產生缺失。駕駛者應始終恪守交通規則，以實際路標速限為準，確保行車安全。</p>
+        </div>
+
+    </div>
+
+    <footer>
+        &copy; 2026 小企鵝超速雷達 | Designed by begin0808 using Antigravity
+    </footer>
+
+</body>
+</html>
